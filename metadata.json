@@ -1,0 +1,6 @@
+{
+  "name": "AI Trading & Investment Academy",
+  "description": "An AI-powered financial education, strategy development, backtesting, and paper-trading simulation platform for beginner, intermediate, and advanced market participants.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
