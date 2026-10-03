@@ -18,7 +18,21 @@ export type NavigationTab =
   | 'practice'
   | 'tutor'
   | 'journal'
+  | 'governance'
+  | 'admin'
   | 'profile';
+
+export type UserRole = 'admin' | 'user';
+
+export interface AuthSessionUser {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  token: string;
+  createdAt: string;
+}
 
 export interface LocalizedText {
   en: string;
@@ -310,3 +324,249 @@ export interface GlossaryItem {
   formula?: string;
   relatedTab: NavigationTab;
 }
+
+// --- MASTER PROMPT V2 EXTENSIONS ---
+
+export type ChartAnnotationTool =
+  | 'support_line'
+  | 'resistance_line'
+  | 'trendline'
+  | 'entry_marker'
+  | 'stop_marker'
+  | 'target_marker'
+  | 'zone_box';
+
+export interface UserChartDrawing {
+  id: string;
+  tool: ChartAnnotationTool;
+  price1: number;
+  candleIndex1: number;
+  price2?: number;
+  candleIndex2?: number;
+  label: string;
+}
+
+export type ExerciseFormat =
+  | 'mcq'
+  | 'true_false'
+  | 'numeric_calc'
+  | 'candle_click'
+  | 'draw_sr'
+  | 'place_order'
+  | 'spot_mistake'
+  | 'strategy_fix'
+  | 'chart_replay'
+  | 'psychology_scenario';
+
+export type PipelineValidationStage =
+  | 'draft'
+  | 'ai_generated'
+  | 'deterministic_test_passed'
+  | 'human_review'
+  | 'published'
+  | 'flagged';
+
+export interface InteractiveExerciseItem {
+  id: string;
+  format: ExerciseFormat;
+  title: LocalizedText;
+  level: SkillLevel;
+  category: keyof SkillScores;
+  symbol: string;
+  prompt: LocalizedText;
+  hint: LocalizedText;
+  explanation: LocalizedText;
+  stage: PipelineValidationStage;
+  // Format-specific ground truth answer keys
+  mcqOptions?: LocalizedText[];
+  correctOptionIndex?: number;
+  numericExpected?: number;
+  numericTolerance?: number;
+  numericUnit?: string;
+  numericFormulaSteps?: LocalizedText;
+  targetCandleIndex?: number;
+  targetCandleRange?: [number, number];
+  expectedSupportPrice?: number;
+  expectedResistancePrice?: number;
+  priceToleranceInr?: number;
+  expectedOrderSetup?: {
+    direction: 'LONG' | 'SHORT';
+    idealEntry: number;
+    maxStopLoss: number;
+    minTarget: number;
+    minRR: number;
+  };
+  flawedTicketData?: {
+    capitalInr: number;
+    entryPrice: number;
+    stopLoss: number | null;
+    targetPrice: number;
+    shares: number;
+    flawOptions: LocalizedText[];
+    correctFlawIndex: number;
+  };
+  brokenStrategySnippet?: {
+    code: string;
+    bugOptions: LocalizedText[];
+    correctBugIndex: number;
+    fixedCode: string;
+  };
+}
+
+export type AIAgentRole =
+  | 'concept_teacher'
+  | 'math_risk_tutor'
+  | 'chart_coach'
+  | 'strategy_auditor'
+  | 'quiz_examiner'
+  | 'journal_psych_coach'
+  | 'safety_guard';
+
+export interface AIErrorReport {
+  id: string;
+  timestamp: string;
+  sourceModule: 'AI Tutor' | 'AI Chart Coach' | 'Exercise Engine' | 'Strategy Auditor';
+  issueType:
+    | 'Calculation / Math Mismatch'
+    | 'Inaccurate Chart Level'
+    | 'Overly Complex Jargon'
+    | 'Unsafe / Predictive Tone'
+    | 'Other Educational Feedback';
+  contextSnippet: string;
+  userComment: string;
+  status: 'open_review' | 'verified_fixed' | 'resolved_by_deterministic_solver';
+}
+
+// --- CHAPTER-BASED MASTERY LEARNING SYSTEM (V1.0) ---
+
+export type ChapterStageCategory =
+  | 'Foundation'
+  | 'Core Trading'
+  | 'Risk'
+  | 'Strategy'
+  | 'Advanced';
+
+export type ChapterMasteryStatus =
+  | 'locked'
+  | 'available'
+  | 'learning'
+  | 'practice'
+  | 'assessment'
+  | 'mastered'
+  | 'needs_review';
+
+export interface ChapterConcept {
+  id: string;
+  title: LocalizedText;
+  isCritical: boolean;
+}
+
+export interface ChapterInteractiveLesson {
+  id: string;
+  title: LocalizedText;
+  durationMinutes: number;
+  conceptId: string;
+  conceptSummary: LocalizedText;
+  visualExample: LocalizedText;
+  formulaOrRule?: string;
+  chartSymbol?: string;
+  quickCheck: {
+    question: LocalizedText;
+    options: LocalizedText[];
+    correctIndex: number;
+    explanation: LocalizedText;
+  };
+}
+
+export interface ChapterPracticeActivity {
+  id: string;
+  title: LocalizedText;
+  conceptId: string;
+  type: 'numeric_calc' | 'scenario_decision' | 'chart_reading';
+  prompt: LocalizedText;
+  hint: LocalizedText;
+  // Deterministic numeric check or option check
+  expectedNumeric?: number;
+  numericTolerance?: number;
+  numericUnit?: string;
+  options?: LocalizedText[];
+  correctOptionIndex?: number;
+  explanation: LocalizedText;
+}
+
+export interface ChapterAssessmentQuestion {
+  id: string;
+  conceptId: string;
+  isCriticalConcept: boolean;
+  questionType: 'calculation' | 'scenario' | 'chart_interpretation' | 'true_false' | 'mcq';
+  prompt: LocalizedText;
+  options: LocalizedText[];
+  correctIndex: number;
+  deterministicFormulaNote?: string;
+  explanation: LocalizedText;
+}
+
+export interface ChapterDefinition {
+  id: string;
+  chapterNumber: number;
+  stageCategory: ChapterStageCategory;
+  title: LocalizedText;
+  description: LocalizedText;
+  iconName: string;
+  estimatedMinutes: number;
+  prerequisiteChapterIds: string[];
+  masteryThreshold: number; // default 80
+  concepts: ChapterConcept[];
+  lessons: ChapterInteractiveLesson[];
+  practiceActivities: ChapterPracticeActivity[];
+  assessmentQuestions: ChapterAssessmentQuestion[];
+}
+
+export interface UserChapterProgress {
+  userId: string;
+  chapterId: string;
+  status: ChapterMasteryStatus;
+  completedLessonIds: string[];
+  completedPracticeIds: string[];
+  lessonProgress: number; // 0-100
+  practiceProgress: number; // 0-100
+  assessmentBestScore?: number;
+  masteryScore?: number;
+  criticalConceptsPassed: boolean;
+  weakConceptIds: string[];
+  attemptsCount: number;
+  startedAt?: string;
+  masteredAt?: string;
+  lastActivityAt?: string;
+}
+
+export interface UserWeakSkill {
+  conceptId: string;
+  chapterId: string;
+  chapterNumber: number;
+  title: LocalizedText;
+  accuracyScore: number; // 0-100
+  needsRemediation: boolean;
+  lastTestedAt: string;
+}
+
+export interface LearningAnalyticsEvent {
+  id: string;
+  userId: string;
+  eventType:
+    | 'chapter_viewed'
+    | 'chapter_started'
+    | 'lesson_completed'
+    | 'practice_completed'
+    | 'assessment_completed'
+    | 'chapter_mastered'
+    | 'chapter_failed'
+    | 'skill_marked_weak'
+    | 'targeted_practice_completed'
+    | 'chapter_unlocked';
+  chapterId: string;
+  timestamp: string;
+  details: string;
+}
+
+

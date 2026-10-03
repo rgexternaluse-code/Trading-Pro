@@ -405,40 +405,68 @@ export const INDIAN_MARKET_NEWS: MarketNewsItem[] = [
 ];
 
 /**
- * Calculates realistic Indian Equity Intraday / Delivery statutory & brokerage charges
+ * Calculates realistic Indian Equity Intraday / Delivery / Options statutory & brokerage charges
  * (Brokerage + STT + NSE Exchange Txn Charge + SEBI Turnover Fee + Stamp Duty + 18% GST)
  */
 export function calculateIndianTradeCharges(params: {
-  buyPrice: number;
-  sellPrice: number;
+  buyPrice?: number;
+  sellPrice?: number;
+  entryPrice?: number;
+  exitPrice?: number;
   quantity: number;
-  mode: 'intraday' | 'delivery';
+  mode?: 'intraday' | 'delivery' | 'options';
+  segment?: string;
 }) {
-  const { buyPrice, sellPrice, quantity, mode } = params;
+  const buyPrice = params.buyPrice ?? params.entryPrice ?? 0;
+  const sellPrice = params.sellPrice ?? params.exitPrice ?? 0;
+  const quantity = params.quantity;
+  const mode: 'intraday' | 'delivery' | 'options' =
+    params.mode ?? (params.segment === 'delivery' ? 'delivery' : 'intraday');
   const buyTurnover = buyPrice * quantity;
   const sellTurnover = sellPrice * quantity;
   const totalTurnover = buyTurnover + sellTurnover;
 
-  // Flat discount broker model: min(₹20, 0.03% of leg) for intraday; ₹0 or ₹20 for delivery
-  const brokerageBuy = mode === 'intraday' ? Math.min(20, buyTurnover * 0.0003) : 0;
-  const brokerageSell = mode === 'intraday' ? Math.min(20, sellTurnover * 0.0003) : 0;
+  // Flat discount broker model:
+  // - intraday: min(₹20, 0.03% of leg)
+  // - delivery: ₹0
+  // - options: flat ₹20 per executed leg (buy ₹20, sell ₹20)
+  const brokerageBuy =
+    mode === 'options'
+      ? 20
+      : mode === 'intraday'
+      ? Math.min(20, buyTurnover * 0.0003)
+      : 0;
+  const brokerageSell =
+    mode === 'options'
+      ? 20
+      : mode === 'intraday'
+      ? Math.min(20, sellTurnover * 0.0003)
+      : 0;
   const totalBrokerage = Number((brokerageBuy + brokerageSell).toFixed(2));
 
-  // STT: 0.025% on sell side for intraday; 0.1% on both buy & sell for delivery
+  // STT:
+  // - intraday: 0.025% on sell side
+  // - delivery: 0.1% on buy & sell
+  // - options: 0.1% on sell side premium turnover
   const stt = Number(
-    (mode === 'intraday' ? sellTurnover * 0.00025 : totalTurnover * 0.001).toFixed(2)
+    (mode === 'options'
+      ? sellTurnover * 0.001
+      : mode === 'intraday'
+      ? sellTurnover * 0.00025
+      : totalTurnover * 0.001
+    ).toFixed(2)
   );
 
-  // NSE Exchange Transaction Charge (~0.00297%)
-  const exchangeCharges = Number((totalTurnover * 0.0000297).toFixed(2));
+  // NSE Exchange Transaction Charge (~0.00297% equity, ~0.05% options premium)
+  const exchangeRate = mode === 'options' ? 0.0005 : 0.0000297;
+  const exchangeCharges = Number((totalTurnover * exchangeRate).toFixed(2));
 
   // SEBI Turnover Fees (₹10 per crore = 0.0001%)
   const sebiCharges = Number((totalTurnover * 0.000001).toFixed(2));
 
-  // Stamp Duty on Buy side (0.003% intraday, 0.015% delivery)
-  const stampDuty = Number(
-    (buyTurnover * (mode === 'intraday' ? 0.00003 : 0.00015)).toFixed(2)
-  );
+  // Stamp Duty on Buy side (0.003% intraday/options, 0.015% delivery)
+  const stampRate = mode === 'delivery' ? 0.00015 : 0.00003;
+  const stampDuty = Number((buyTurnover * stampRate).toFixed(2));
 
   // GST 18% on (Brokerage + Exchange Charges + SEBI Charges)
   const gst = Number(((totalBrokerage + exchangeCharges + sebiCharges) * 0.18).toFixed(2));
@@ -456,6 +484,7 @@ export function calculateIndianTradeCharges(params: {
     sellTurnover: Number(sellTurnover.toFixed(2)),
     totalTurnover: Number(totalTurnover.toFixed(2)),
     totalBrokerage,
+    brokerage: totalBrokerage,
     stt,
     exchangeCharges,
     sebiCharges,
@@ -465,5 +494,6 @@ export function calculateIndianTradeCharges(params: {
     grossPnl,
     netPnl,
     breakevenMovePerShare,
+    breakevenPointsPerShare: breakevenMovePerShare,
   };
 }

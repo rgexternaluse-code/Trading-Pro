@@ -1,0 +1,10 @@
+{
+	"appId": "com.tradelearn.academy",
+	"appName": "TradeLearn",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
+	"plugins": {}
+}

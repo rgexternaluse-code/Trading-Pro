@@ -15,36 +15,55 @@ import {
   ShieldCheck,
   ArrowRight,
   RotateCcw,
+  LogOut,
+  Eye,
+  TrendingUp,
+  Sparkles,
+  Play,
+  CheckCircle2,
 } from 'lucide-react';
 import {
+  AIErrorReport,
+  AuthSessionUser,
+  ChapterDefinition,
   JournalEntry,
   Language,
+  LearningAnalyticsEvent,
   Lesson,
   NavigationTab,
   PaperPosition,
   PaperTradeRecord,
   SkillLevel,
+  UserChapterProgress,
   UserProfile,
+  UserWeakSkill,
 } from './types';
 import { COURSE_PATHS } from './data/curriculumData';
+import { CHAPTER_CURRICULUM } from './data/chapterCurriculum';
+import { computeChapterStatus } from './services/masteryEngine';
 import {
   GLOSSARY_ITEMS,
   INITIAL_JOURNAL_ENTRIES,
   INITIAL_PAPER_POSITIONS,
   INITIAL_PAPER_TRADES,
 } from './data/challengesAndGlossary';
+import { INITIAL_AI_ERROR_REPORTS } from './data/interactiveExercisesV2';
 import { calculateIndianTradeCharges } from './data/indianMarketData';
 import { LanguageOnboardingModal } from './components/LanguageOnboardingModal';
+import { LoginScreen } from './components/LoginScreen';
+import { AdminDashboardSection } from './components/AdminDashboardSection';
 import { LearnSection } from './components/LearnSection';
 import { MarketsSection } from './components/MarketsSection';
 import { PracticeSection } from './components/PracticeSection';
 import { AITutorSection } from './components/AITutorSection';
 import { JournalSection } from './components/JournalSection';
+import { GovernanceStudioSection } from './components/GovernanceStudioSection';
 
 const STORAGE_KEY_PROFILE = 'aitia_user_profile_v1';
 const STORAGE_KEY_POSITIONS = 'aitia_paper_positions_v1';
 const STORAGE_KEY_TRADES = 'aitia_paper_trades_v1';
 const STORAGE_KEY_JOURNAL = 'aitia_journal_entries_v1';
+const STORAGE_KEY_SESSION = 'aitia_auth_session_v1';
 
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Aarav Sharma',
@@ -111,7 +130,191 @@ export default function App() {
     return INITIAL_JOURNAL_ENTRIES;
   });
 
+  const [errorReports, setErrorReports] = useState<AIErrorReport[]>(
+    INITIAL_AI_ERROR_REPORTS
+  );
+
+  const handleReportIssue = (
+    report: Omit<AIErrorReport, 'id' | 'timestamp' | 'status'>
+  ) => {
+    const newRep: AIErrorReport = {
+      ...report,
+      id: 'err-' + Date.now(),
+      timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      status: 'open_review',
+    };
+    setErrorReports((prev) => [newRep, ...prev]);
+  };
+
+  const handleResolveReport = (id: string) => {
+    setErrorReports((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, status: 'verified_fixed' } : r))
+    );
+  };
+
   const [activeTab, setActiveTab] = useState<NavigationTab>('home');
+  const [authUser, setAuthUser] = useState<AuthSessionUser | null>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_SESSION);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  });
+  const [sessionMessage, setSessionMessage] = useState<string | null>(null);
+
+  // 18-Chapter Mastery System State
+  const [chapters, setChapters] = useState<ChapterDefinition[]>(CHAPTER_CURRICULUM);
+  const [activeChapterId, setActiveChapterId] = useState<string>('ch-01');
+  const [chapterProgressMap, setChapterProgressMap] = useState<
+    Record<string, UserChapterProgress>
+  >({});
+  const [weakSkills, setWeakSkills] = useState<UserWeakSkill[]>([]);
+  const [analyticsEvents, setAnalyticsEvents] = useState<LearningAnalyticsEvent[]>([]);
+  // Separate simulation progress map when Admin toggles "Preview as User" (Section 40.12)
+  const [isPreviewAsUser, setIsPreviewAsUser] = useState<boolean>(false);
+  const [previewProgressMap, setPreviewProgressMap] = useState<
+    Record<string, UserChapterProgress>
+  >({});
+
+  // Verify backend session on mount if token exists
+  useEffect(() => {
+    if (!authUser?.token) return;
+    fetch('/api/auth/session', {
+      headers: { Authorization: `Bearer ${authUser.token}` },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error('Session expired');
+        return res.json();
+      })
+      .then((data) => {
+        if (data.user) {
+          setAuthUser(data.user);
+          localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(data.user));
+        }
+      })
+      .catch(() => {
+        // Re-authenticate or clear stale token
+      });
+  }, []);
+
+  // Load user-isolated chapter progress from backend/localStorage when authUser changes
+  useEffect(() => {
+    if (!authUser) return;
+    const localKey = `aitia_chapter_prog_${authUser.id}`;
+    try {
+      const savedLocal = localStorage.getItem(localKey);
+      if (savedLocal) {
+        setChapterProgressMap(JSON.parse(savedLocal));
+      } else {
+        setChapterProgressMap({});
+      }
+    } catch {}
+
+    fetch('/api/user/progress', {
+      headers: { Authorization: `Bearer ${authUser.token}` },
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.progress && Object.keys(data.progress).length > 0) {
+          setChapterProgressMap(data.progress);
+        }
+      })
+      .catch(() => {});
+  }, [authUser?.id]);
+
+  const handleLoginSuccess = (loggedInUser: AuthSessionUser) => {
+    setAuthUser(loggedInUser);
+    setSessionMessage(null);
+    setIsPreviewAsUser(false);
+    try {
+      localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(loggedInUser));
+    } catch {}
+    setProfile((prev) => ({
+      ...prev,
+      name: loggedInUser.displayName,
+    }));
+    // Land on TradeLearn Home screen so user immediately sees the redesigned UI
+    setActiveTab('home');
+  };
+
+  const handleLogout = async () => {
+    if (authUser?.token) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authUser.token}` },
+        });
+      } catch {}
+    }
+    try {
+      localStorage.removeItem(STORAGE_KEY_SESSION);
+    } catch {}
+    setAuthUser(null);
+    setIsPreviewAsUser(false);
+    setActiveTab('home');
+  };
+
+  const handleUpdateChapterProgress = (
+    chapterId: string,
+    updated: UserChapterProgress,
+    updatedWeakSkills?: UserWeakSkill[],
+    eventType?: LearningAnalyticsEvent['eventType'],
+    details?: string
+  ) => {
+    if (updatedWeakSkills) {
+      setWeakSkills(updatedWeakSkills);
+    }
+    if (eventType && authUser) {
+      setAnalyticsEvents((prev) => [
+        {
+          id: `ev-${Date.now()}`,
+          userId: authUser.id,
+          eventType,
+          chapterId,
+          timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '),
+          details: details || '',
+        },
+        ...prev,
+      ]);
+    }
+
+    // If Admin is in "Preview as User" mode, mutate only simulation state (Section 40.12)
+    if (authUser?.role === 'admin' && isPreviewAsUser) {
+      setPreviewProgressMap((prev) => ({ ...prev, [chapterId]: updated }));
+      return;
+    }
+
+    setChapterProgressMap((prev) => {
+      const next = { ...prev, [chapterId]: updated };
+      if (authUser) {
+        try {
+          localStorage.setItem(
+            `aitia_chapter_prog_${authUser.id}`,
+            JSON.stringify(next)
+          );
+        } catch {}
+        fetch('/api/user/progress', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authUser.token}`,
+          },
+          body: JSON.stringify({ progress: next }),
+        }).catch(() => {});
+      }
+      return next;
+    });
+  };
+
+  const handleUpdateChapterConfig = (
+    chapterId: string,
+    updates: { masteryThreshold?: number; prerequisiteChapterIds?: string[] }
+  ) => {
+    setChapters((prev) =>
+      prev.map((ch) => (ch.id === chapterId ? { ...ch, ...updates } : ch))
+    );
+  };
+
   const [modalMode, setModalMode] = useState<'language_only' | 'full_onboarding' | null>(
     !profile.hasSelectedLanguage ? 'full_onboarding' : null
   );
@@ -123,6 +326,7 @@ export default function App() {
     try {
       localStorage.setItem(STORAGE_KEY_PROFILE, JSON.stringify(profile));
     } catch {}
+    document.documentElement.setAttribute('data-theme', profile.theme || 'dark');
   }, [profile]);
 
   useEffect(() => {
@@ -209,12 +413,22 @@ export default function App() {
     setModalMode(null);
   };
 
-  const handleCompleteLesson = (lesson: Lesson, quizCorrect: boolean) => {
+  const handleCompleteLesson = (
+    lessonOrId: Lesson | string,
+    quizCorrect: boolean
+  ) => {
+    const lessonId = typeof lessonOrId === 'string' ? lessonOrId : lessonOrId.id;
+    const lesson =
+      typeof lessonOrId === 'string'
+        ? allLessons.find((l) => l.id === lessonId)
+        : lessonOrId;
+    const category = lesson?.category || 'marketBasics';
+
     setProfile((prev) => {
-      const completed = prev.completedLessonIds.includes(lesson.id)
+      const completed = prev.completedLessonIds.includes(lessonId)
         ? prev.completedLessonIds
-        : [...prev.completedLessonIds, lesson.id];
-      const currentCatScore = prev.skillScores[lesson.category] || 50;
+        : [...prev.completedLessonIds, lessonId];
+      const currentCatScore = prev.skillScores[category] || 50;
       const delta = quizCorrect ? 8 : 3;
       return {
         ...prev,
@@ -225,7 +439,7 @@ export default function App() {
           : Math.max(40, Math.round((prev.quizAccuracy + 50) / 2)),
         skillScores: {
           ...prev.skillScores,
-          [lesson.category]: Math.min(100, currentCatScore + delta),
+          [category]: Math.min(100, currentCatScore + delta),
         },
       };
     });
@@ -331,11 +545,45 @@ export default function App() {
   );
 
   const isLight = profile.theme === 'light';
+  const isAdmin = authUser?.role === 'admin';
+  const effectiveAdminBypass = Boolean(isAdmin && !isPreviewAsUser);
+  const effectiveChapterProgressMap =
+    isAdmin && isPreviewAsUser ? previewProgressMap : chapterProgressMap;
+
+  const masteredChaptersCount = chapters.filter(
+    (c) =>
+      computeChapterStatus(
+        c,
+        effectiveChapterProgressMap,
+        effectiveAdminBypass
+      ) === 'mastered'
+  ).length;
+
+  const currentFocusChapter =
+    chapters.find(
+      (c) =>
+        computeChapterStatus(
+          c,
+          effectiveChapterProgressMap,
+          false
+        ) !== 'mastered'
+    ) || chapters[0];
+
+  // Require login before accessing the application (Section 40.3)
+  if (!authUser) {
+    return (
+      <LoginScreen
+        onLoginSuccess={handleLoginSuccess}
+        sessionExpiredMessage={sessionMessage}
+      />
+    );
+  }
 
   return (
     <div
-      className={`min-h-screen flex flex-col ${
-        isLight ? 'bg-slate-50 text-slate-900' : 'bg-[#090D16] text-slate-100'
+      data-theme={profile.theme || 'dark'}
+      className={`min-h-screen flex flex-col transition-colors ${
+        isLight ? 'bg-[#F7F8FC] text-[#0F172A]' : 'bg-[#0B1020] text-[#F8FAFC]'
       }`}
     >
       {/* Initial Language & Onboarding Popup Modal */}
@@ -414,230 +662,628 @@ export default function App() {
       )}
 
       {/* TOP BAR CONTRACT (Strict 3-Zone Header: Brand Wordmark — Primary Nav Links — Actions) */}
-      <header className="sticky top-0 z-30 flex items-center justify-between px-4 md:px-8 py-3.5 border-b border-slate-800/90 bg-[#090D16]/95 backdrop-blur">
-        {/* Zone 1: Single Text Brand Wordmark */}
+      <header
+        className={`sticky top-0 z-30 flex items-center justify-between px-4 md:px-8 py-3.5 border-b backdrop-blur-md ${
+          isLight
+            ? 'border-[#E2E8F0] bg-[#FFFFFF]/95'
+            : 'border-[#1E2D4A] bg-[#070D19]/95'
+        }`}
+      >
+        {/* Zone 1: TradeLearn Brand Identity */}
         <a
           href="#home"
           onClick={(e) => {
             e.preventDefault();
             setActiveTab('home');
           }}
-          className="text-base md:text-lg font-bold tracking-tight text-white whitespace-nowrap"
+          className="flex items-center gap-3 whitespace-nowrap group"
         >
-          AI Trading Academy
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#14B8A6]/25 to-[#6366F1]/25 border border-[#14B8A6]/40 flex items-center justify-center text-[#14B8A6] shadow-inner">
+            <TrendingUp className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-base font-extrabold tracking-tight text-white leading-none">
+              TradeLearn
+            </div>
+            <div className="text-[10px] text-slate-400 font-medium tracking-wide mt-0.5">
+              Learn • Practice • Grow
+            </div>
+          </div>
         </a>
 
-        {/* Zone 2: Clean Text Navigation Links */}
-        <nav className="hidden lg:flex items-center gap-6 text-xs font-medium text-slate-300">
+        {/* Zone 2: Sleek Segmented Navigation Bar (Role-Aware) */}
+        <nav className="hidden lg:flex items-center gap-1 p-1 rounded-full bg-[#0B1325] border border-[#1E2D4A]">
           {(
             [
-              { id: 'home', label: 'Home' },
-              { id: 'learn', label: 'Learn' },
-              { id: 'markets', label: 'Markets' },
-              { id: 'practice', label: 'Practice Lab' },
-              { id: 'tutor', label: 'AI Tutor' },
-              { id: 'journal', label: 'Journal' },
-              { id: 'profile', label: 'Profile & Settings' },
-            ] as const
-          ).map((nav) => (
-            <button
-              key={nav.id}
-              type="button"
-              onClick={() => setActiveTab(nav.id)}
-              className={`py-1 transition-colors whitespace-nowrap border-b-2 ${
-                activeTab === nav.id
-                  ? 'border-blue-500 text-white font-semibold'
-                  : 'border-transparent text-slate-400 hover:text-white'
-              }`}
-            >
-              {nav.label}
-            </button>
-          ))}
+              { id: 'home' as NavigationTab, label: 'Home' },
+              { id: 'learn' as NavigationTab, label: 'Easy Lessons' },
+              { id: 'practice' as NavigationTab, label: 'Hands-on Practice' },
+              { id: 'tutor' as NavigationTab, label: '✦ AI Tutor' },
+              { id: 'markets' as NavigationTab, label: 'Markets' },
+              { id: 'journal' as NavigationTab, label: 'Journal' },
+              { id: 'governance' as NavigationTab, label: 'QA Lab' },
+              ...(isAdmin
+                ? [{ id: 'admin' as NavigationTab, label: '★ Admin Studio' }]
+                : []),
+              { id: 'profile' as NavigationTab, label: 'Profile' },
+            ]
+          ).map((nav) => {
+            const isAiTab = nav.id === 'tutor';
+            const isActive = activeTab === nav.id;
+            return (
+              <button
+                key={nav.id}
+                type="button"
+                onClick={() => setActiveTab(nav.id)}
+                className={`px-3.5 py-1.5 rounded-full text-xs transition-all whitespace-nowrap cursor-pointer ${
+                  isActive
+                    ? isAiTab
+                      ? 'bg-[#14B8A6] text-white font-bold shadow-sm'
+                      : 'bg-gradient-to-r from-[#5B5FEF] to-[#6366F1] text-white font-bold shadow-sm'
+                    : isAiTab
+                    ? 'text-[#14B8A6] hover:bg-[#14B8A6]/10 font-semibold'
+                    : 'text-slate-300 hover:text-white font-medium'
+                }`}
+              >
+                {nav.label}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Zone 3: 2 Primary Actions (Search Knowledge Base + Language Switcher) */}
-        <div className="flex items-center gap-2.5">
+        {/* Zone 3: Primary Actions (Role Badge + Search + Theme + Language + Logout) */}
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setIsPreviewAsUser((prev) => !prev)}
+              title="Toggle Admin Preview as User Simulation Mode"
+              className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono cursor-pointer ${
+                isPreviewAsUser
+                  ? 'border-[#F59E0B] bg-[#F59E0B]/15 text-[#F59E0B]'
+                  : 'border-[#6366F1]/40 bg-[#6366F1]/15 text-[#6366F1]'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>{isPreviewAsUser ? 'User Preview' : 'Admin Mode'}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setGlobalSearchOpen(true)}
-            className="px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:border-slate-700 text-xs text-slate-300 flex items-center gap-1.5 whitespace-nowrap"
+            className="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:border-slate-700 text-xs text-slate-300 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Search className="w-3.5 h-3.5 text-slate-400" />
-            <span className="hidden sm:inline">Search Glossary</span>
+            <span className="hidden sm:inline">Glossary</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              updateProfile({
+                theme: profile.theme === 'dark' ? 'light' : 'dark',
+              })
+            }
+            title="Switch between Dark Theme (Charts/Trading) and Light Theme (Reading/Lessons)"
+            className="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:border-slate-700 text-xs text-slate-300 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            {profile.theme === 'dark' ? (
+              <>
+                <Sun className="w-3.5 h-3.5 text-[#F59E0B]" />
+                <span className="hidden md:inline">Light</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-3.5 h-3.5 text-[#6366F1]" />
+                <span className="hidden md:inline">Dark</span>
+              </>
+            )}
           </button>
 
           <button
             type="button"
             onClick={() => setModalMode('language_only')}
-            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors"
+            className="px-2.5 py-1.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer"
           >
             <Globe className="w-3.5 h-3.5" />
-            <span>{lang === 'hinglish' ? 'Hinglish · Change' : 'English · Change'}</span>
+            <span>{lang === 'hinglish' ? 'Hinglish' : 'English'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={`Logged in as ${authUser.username} (${authUser.role.toUpperCase()}) · Click to Logout`}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-900 hover:border-[#EF4444] text-xs text-slate-300 hover:text-[#EF4444] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{authUser.username}</span>
           </button>
         </div>
       </header>
 
       {/* MAIN VIEWPORT WORKSPACE */}
-      <main className="flex-1 w-full max-w-[1380px] mx-auto px-4 md:px-8 py-6 pb-24 lg:pb-10">
-        {/* TAB 1: HOME DASHBOARD (Section 5) */}
+      <main className="flex-1 w-full max-w-[1380px] mx-auto px-4 md:px-8 py-6 pb-24 lg:pb-10 relative">
+        {/* Ambient radial background glows matching TradeLearn UI */}
+        {!isLight && (
+          <>
+            <div className="pointer-events-none fixed top-16 left-1/3 w-[520px] h-[320px] rounded-full bg-[#6366F1]/10 blur-[120px] -z-10" />
+            <div className="pointer-events-none fixed bottom-16 right-1/4 w-[420px] h-[280px] rounded-full bg-[#14B8A6]/10 blur-[110px] -z-10" />
+          </>
+        )}
+
+        {/* TAB 1: HOME DASHBOARD (TradeLearn Reference Design: Screen 1 Hero + Screen 2 Progress & Today's Lesson + Learning Path) */}
         {activeTab === 'home' && (
           <div className="space-y-6">
-            {/* Hero Welcome & Adaptive Process Banner */}
-            <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5 md:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-              <div className="space-y-2 max-w-2xl">
-                <div className="text-xs text-slate-400 font-mono">
-                  Skill Tier: {profile.skillLevel.toUpperCase()} · Streak: {profile.streakDays} Days · Language:{' '}
-                  {lang === 'hinglish' ? 'Hinglish (Hindi + English)' : 'English'} · Market: NSE/BSE (₹ INR)
-                </div>
-                <h1 className="text-xl md:text-2xl font-semibold text-white">
-                  {lang === 'hinglish'
-                    ? `Namaste ${profile.name}. Aap apni ${profile.skillLevel} learning path mein ${progressPct}% aage badh chuke hain.`
-                    : `Good day, ${profile.name}. You are ${progressPct}% through your personalized curriculum.`}
-                </h1>
-                <p className="text-xs md:text-sm text-slate-300 leading-relaxed">
-                  {lang === 'hinglish'
-                    ? 'Hamara Core Process: LEARN → PRACTICE → DEFINE RULES → BACKTEST → PAPER TRADE → REVIEW. Bina stop-loss aur 1% position sizing ke kabhi trade na lein.'
-                    : 'Core Academy Philosophy: "Don’t try to predict everything. Build a rules-based process." Learn → Practice → Define Rules → Backtest → Paper Trade → Review.'}
-                </p>
-              </div>
+            {/* TOP SPLIT SHOWCASE: LEFT = TRADELEARN HERO CARD (Exact Reference Image) | RIGHT = PERSONAL PROGRESS & TODAY'S LESSON */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              {/* LEFT CARD (6 COLS): EXACT TRADELEARN HERO & 3 PILLAR CARDS FROM SHARED IMAGE */}
+              <div className="lg:col-span-6 bg-[#0B1325] border border-[#1E2D4A] rounded-3xl p-6 md:p-7 shadow-2xl flex flex-col justify-between space-y-5 relative overflow-hidden">
+                <div className="pointer-events-none absolute -top-20 left-1/2 -translate-x-1/2 w-72 h-44 rounded-full bg-[#14B8A6]/15 blur-[80px]" />
 
-              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                {/* Brand Header */}
+                <div className="flex items-center justify-between gap-3 relative z-10">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#14B8A6]/25 to-[#6366F1]/25 border border-[#14B8A6]/40 flex items-center justify-center text-[#14B8A6] shadow-inner">
+                      <TrendingUp className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-lg font-extrabold tracking-tight text-white leading-none">
+                        TradeLearn
+                      </div>
+                      <div className="text-[11px] text-[#94A3B8] font-medium tracking-wide mt-0.5">
+                        Learn • Practice • Grow
+                      </div>
+                    </div>
+                  </div>
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('admin')}
+                      className="px-3.5 py-1.5 rounded-full bg-[#6366F1]/15 border border-[#6366F1]/40 text-xs font-bold text-[#818CF8] hover:bg-[#6366F1]/25 cursor-pointer"
+                    >
+                      ★ Open Admin Studio →
+                    </button>
+                  )}
+                </div>
+
+                {/* Custom Candlestick & Trader Hero Illustration */}
+                <div className="relative rounded-2xl bg-gradient-to-b from-[#0E1A32] to-[#091122] border border-[#1C2C4C] p-4 overflow-hidden">
+                  <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_65%_40%,rgba(20,184,166,0.18),transparent_65%)]" />
+                  <svg
+                    viewBox="0 0 480 175"
+                    className="w-full h-36 md:h-40 overflow-visible"
+                    aria-label="Learn Trading Step by Step Illustration"
+                  >
+                    {[30, 70, 110, 150].map((y) => (
+                      <line
+                        key={y}
+                        x1="16"
+                        y1={y}
+                        x2="464"
+                        y2={y}
+                        stroke="#1B2A47"
+                        strokeDasharray="3 4"
+                        strokeWidth="1"
+                      />
+                    ))}
+                    <path
+                      d="M 28 142 Q 115 124, 185 90 T 355 52 L 445 20"
+                      fill="none"
+                      stroke="#22C55E"
+                      strokeWidth="3.5"
+                      strokeLinecap="round"
+                    />
+                    <polygon points="452,14 436,16 444,29" fill="#22C55E" />
+                    {[
+                      { x: 40, h: 108, l: 152, o: 140, c: 118, bull: true },
+                      { x: 72, h: 100, l: 144, o: 118, c: 132, bull: false },
+                      { x: 104, h: 80, l: 132, o: 126, c: 92, bull: true },
+                      { x: 136, h: 60, l: 114, o: 92, c: 70, bull: true },
+                      { x: 168, h: 68, l: 118, o: 74, c: 102, bull: false },
+                      { x: 200, h: 44, l: 100, o: 94, c: 54, bull: true },
+                      { x: 232, h: 34, l: 84, o: 54, c: 42, bull: true },
+                      { x: 376, h: 42, l: 94, o: 80, c: 52, bull: true },
+                      { x: 410, h: 24, l: 74, o: 52, c: 30, bull: true },
+                    ].map((cd, i) => {
+                      const col = cd.bull ? '#22C55E' : '#EF4444';
+                      const top = Math.min(cd.o, cd.c);
+                      const height = Math.max(8, Math.abs(cd.c - cd.o));
+                      return (
+                        <g key={i}>
+                          <line
+                            x1={cd.x}
+                            y1={cd.h}
+                            x2={cd.x}
+                            y2={cd.l}
+                            stroke={col}
+                            strokeWidth="2.2"
+                          />
+                          <rect
+                            x={cd.x - 8}
+                            y={top}
+                            width="16"
+                            height={height}
+                            rx="3"
+                            fill={col}
+                          />
+                        </g>
+                      );
+                    })}
+                    <g transform="translate(245, 36)">
+                      <path
+                        d="M 28 84 C 28 58, 92 58, 92 84 L 102 128 L 18 128 Z"
+                        fill="#4F46E5"
+                      />
+                      <circle cx="60" cy="36" r="21" fill="#FDBA74" />
+                      <path
+                        d="M 39 32 C 38 14, 82 12, 81 32 C 74 22, 48 22, 39 32 Z"
+                        fill="#1E1B4B"
+                      />
+                      <circle cx="52" cy="35" r="2" fill="#0F172A" />
+                      <circle cx="66" cy="35" r="2" fill="#0F172A" />
+                      <path
+                        d="M 54 44 Q 59 48, 65 44"
+                        fill="none"
+                        stroke="#0F172A"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                      <rect
+                        x="62"
+                        y="78"
+                        width="64"
+                        height="44"
+                        rx="6"
+                        fill="#CBD5E1"
+                        stroke="#94A3B8"
+                        strokeWidth="2"
+                      />
+                      <circle cx="94" cy="100" r="5" fill="#64748B" />
+                      <rect
+                        x="46"
+                        y="122"
+                        width="90"
+                        height="6"
+                        rx="3"
+                        fill="#94A3B8"
+                      />
+                    </g>
+                  </svg>
+                </div>
+
+                {/* Headline & Subtitle */}
+                <div className="space-y-1.5">
+                  <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight leading-tight">
+                    <span className="block text-white">Learn Trading</span>
+                    <span className="block bg-gradient-to-r from-[#60A5FA] via-[#818CF8] to-[#6366F1] bg-clip-text text-transparent">
+                      Step by Step
+                    </span>
+                  </h1>
+                  <p className="text-xs md:text-sm text-[#94A3B8] leading-relaxed">
+                    Build your skills, gain confidence and master the markets — at
+                    your own pace.
+                  </p>
+                </div>
+
+                {/* 3 Feature Pillar Cards (Easy Lessons · Hands-on Practice · AI Tutor) */}
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('learn')}
+                    className="p-3.5 rounded-2xl bg-[#101C34] border border-[#223254] hover:border-[#60A5FA] text-center space-y-1.5 transition-all cursor-pointer"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-[#3B82F6]/15 border border-[#3B82F6]/30 text-[#60A5FA] flex items-center justify-center mx-auto">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold text-white leading-snug">
+                      Easy Lessons
+                    </div>
+                    <p className="text-[11px] text-[#94A3B8] leading-tight">
+                      Simple, clear and visual.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('practice')}
+                    className="p-3.5 rounded-2xl bg-[#101C34] border border-[#223254] hover:border-[#22C55E] text-center space-y-1.5 transition-all cursor-pointer"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-[#22C55E]/15 border border-[#22C55E]/30 text-[#22C55E] flex items-center justify-center mx-auto">
+                      <BarChart3 className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold text-white leading-snug">
+                      Hands-on Practice
+                    </div>
+                    <p className="text-[11px] text-[#94A3B8] leading-tight">
+                      Apply what you learn.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('tutor')}
+                    className="p-3.5 rounded-2xl bg-[#101C34] border border-[#223254] hover:border-[#C084FC] text-center space-y-1.5 transition-all cursor-pointer"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-[#A855F7]/15 border border-[#A855F7]/30 text-[#C084FC] flex items-center justify-center mx-auto">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div className="text-xs font-bold text-white leading-snug">
+                      AI Tutor
+                    </div>
+                    <p className="text-[11px] text-[#94A3B8] leading-tight">
+                      Get personal guidance anytime.
+                    </p>
+                  </button>
+                </div>
+
+                {/* Primary Pill CTA Button */}
                 <button
                   type="button"
-                  onClick={() => setActiveTab('learn')}
-                  className="px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-2 transition-colors"
+                  onClick={() => {
+                    setActiveChapterId(currentFocusChapter.id);
+                    setActiveTab('learn');
+                  }}
+                  className="w-full py-3.5 rounded-full bg-gradient-to-r from-[#5B5FEF] to-[#6366F1] hover:from-[#4F46E5] hover:to-[#5B5FEF] text-white text-sm font-bold shadow-lg shadow-[#6366F1]/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
-                  <span>Continue Lesson</span>
+                  <span>Start Learning</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setModalMode('full_onboarding')}
-                  className="px-3.5 py-2.5 rounded-lg border border-slate-700 bg-slate-950 hover:bg-slate-800 text-xs text-slate-200 font-medium"
-                >
-                  Switch Level / Re-Assess
-                </button>
+              </div>
+
+              {/* RIGHT COLUMN (6 COLS): GREETING, PROGRESS RING, TODAY'S LESSON & AI TUTOR */}
+              <div className="lg:col-span-6 flex flex-col justify-between gap-5">
+                {/* Welcome & Overall Progress Card */}
+                <div className="p-6 rounded-3xl border border-[#1E2D4A] bg-[#0B1325] shadow-xl space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-semibold text-[#60A5FA]">
+                        🔥 {profile.streakDays} Day Streak · Level: {profile.skillLevel.toUpperCase()}
+                      </div>
+                      <h2 className="text-xl md:text-2xl font-extrabold text-white mt-0.5">
+                        {lang === 'hinglish'
+                          ? `Namaste, ${profile.name}! 👋`
+                          : `Hello, ${profile.name}! 👋`}
+                      </h2>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setModalMode('full_onboarding')}
+                      className="px-3.5 py-2 rounded-full border border-[#223254] bg-[#101C34] hover:border-[#6366F1] text-xs text-slate-200 font-semibold cursor-pointer"
+                    >
+                      Customize Goal
+                    </button>
+                  </div>
+
+                  {/* Your Progress Bar Box */}
+                  <div className="p-4 rounded-2xl bg-[#101C34] border border-[#223254] space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-white">Your Learning Progress</span>
+                      <span className="font-mono font-bold text-[#60A5FA]">
+                        {masteredChaptersCount}/{chapters.length} Chapters Mastered ({progressPct}% Lessons)
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 rounded-full bg-[#070D19] overflow-hidden border border-[#1E2D4A]">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-[#3B82F6] via-[#6366F1] to-[#14B8A6] transition-all"
+                        style={{ width: `${Math.max(12, progressPct)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Today's Lesson Card */}
+                <div className="p-6 rounded-3xl border border-[#6366F1]/40 bg-[#0B1325] shadow-xl space-y-4">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-[#60A5FA] font-bold uppercase flex items-center gap-1.5">
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>
+                        TODAY&apos;S LESSON · CHAPTER {String(currentFocusChapter.chapterNumber).padStart(2, '0')}
+                      </span>
+                    </span>
+                    <span className="text-slate-400">
+                      {currentFocusChapter.estimatedMinutes} min · {currentFocusChapter.stageCategory}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h3 className="text-lg md:text-xl font-extrabold text-white">
+                      {currentFocusChapter.title[lang]}
+                    </h3>
+                    <p className="text-xs md:text-sm text-slate-300 mt-1 leading-relaxed">
+                      {currentFocusChapter.description[lang]}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveChapterId(currentFocusChapter.id);
+                        setActiveTab('learn');
+                      }}
+                      className="px-5 py-2.5 rounded-full bg-gradient-to-r from-[#5B5FEF] to-[#6366F1] hover:from-[#4F46E5] hover:to-[#5B5FEF] text-white text-xs font-bold shadow-lg shadow-[#6366F1]/25 flex items-center gap-2 cursor-pointer"
+                    >
+                      <span>Continue Lesson</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('practice')}
+                      className="px-4 py-2.5 rounded-full border border-[#223254] bg-[#101C34] hover:border-[#22C55E] text-xs text-slate-200 font-semibold cursor-pointer"
+                    >
+                      Hands-on Simulator →
+                    </button>
+                  </div>
+                </div>
+
+                {/* Personal AI Tutor Card */}
+                <div className="p-6 rounded-3xl border border-[#14B8A6]/40 bg-[#0B1325] shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-xs font-mono font-bold text-[#14B8A6] uppercase">
+                      ✦ AI TUTOR · PERSONAL GUIDANCE ANYTIME
+                    </div>
+                    <h3 className="text-base font-bold text-white">
+                      {lang === 'hinglish'
+                        ? 'Candlestick pattern ya 1% risk rule par sawaal hai?'
+                        : 'Have a question about candlesticks, stop-loss, or chart structure?'}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Ask in English or Hinglish — get step-by-step explanations or upload a chart.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('tutor')}
+                    className="px-5 py-2.5 rounded-full bg-[#14B8A6] hover:bg-[#0D9488] text-white text-xs font-bold shadow-lg shadow-[#14B8A6]/20 flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <span>✦ Ask AI Tutor</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Key Process & Risk Telemetry Row */}
+            {/* YOUR LEARNING PATH — Sleek Rounded-3xl Module Cards with Brand Indigo (#6366F1) Progress */}
+            <div className="p-6 rounded-3xl border border-[#1E2D4A] bg-[#0B1325] space-y-5 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E2D4A] pb-3.5">
+                <div>
+                  <h2 className="text-base md:text-lg font-bold text-white">
+                    Learning Path &amp; Module Progress ({progressPct}% Overall)
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    {profile.completedLessonIds.length} / {allLessons.length} lessons completed · Step-by-step skill progression
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('learn')}
+                  className="text-xs text-[#6366F1] font-semibold hover:underline cursor-pointer flex items-center gap-1"
+                >
+                  <span>View All 18 Chapters</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {COURSE_PATHS.slice(0, 4).map((pathItem, idx) => {
+                  const totalInPath = pathItem.lessons.length;
+                  const doneInPath = pathItem.lessons.filter((l) =>
+                    profile.completedLessonIds.includes(l.id)
+                  ).length;
+                  const pct = Math.round(
+                    (doneInPath / Math.max(1, totalInPath)) * 100
+                  );
+                  const isDone = pct === 100;
+
+                  return (
+                    <div
+                      key={pathItem.id}
+                      className="p-4 rounded-2xl border border-[#223254] bg-[#101C34] flex flex-col justify-between space-y-3 hover:border-[#6366F1]/50 transition-colors"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-mono text-[#60A5FA] font-semibold">
+                            0{idx + 1} · {pathItem.level.toUpperCase()}
+                          </span>
+                          <span
+                            className={`font-mono ${
+                              isDone ? 'text-[#22C55E]' : 'text-slate-400'
+                            }`}
+                          >
+                            {isDone
+                              ? '✓ Completed'
+                              : `${doneInPath}/${totalInPath} lessons`}
+                          </span>
+                        </div>
+                        <h3 className="text-sm font-bold text-white">
+                          {pathItem.title[lang]}
+                        </h3>
+                        <p className="text-xs text-slate-400 line-clamp-2">
+                          {pathItem.subtitle[lang]}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center justify-between text-xs font-mono">
+                          <span className="text-slate-400">Progress</span>
+                          <span
+                            className={
+                              isDone ? 'text-[#22C55E] font-semibold' : 'text-white'
+                            }
+                          >
+                            {pct}%
+                          </span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-[#070D19] overflow-hidden border border-[#1E2D4A]">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${pct}%`,
+                              backgroundColor: isDone ? '#22C55E' : '#6366F1',
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('learn')}
+                          className="text-xs font-semibold text-[#60A5FA] hover:underline flex items-center gap-1 pt-1 cursor-pointer"
+                        >
+                          <span>Continue Lesson →</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Key Process & Chapter Mastery Summary Row (TradeLearn Rounded-2xl Cards) */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono tabular-nums">
-              <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60">
-                <span className="text-xs text-slate-400 block">Overall Curriculum Progress</span>
-                <strong className="text-lg text-white mt-0.5 block">{progressPct}%</strong>
-                <span className="text-[11px] text-emerald-400">
-                  {profile.completedLessonIds.length} of {allLessons.length} modules completed
+              <div className="p-4 rounded-2xl border border-[#1E2D4A] bg-[#0B1325]">
+                <span className="text-xs text-slate-400 block">Chapters Mastered</span>
+                <strong className="text-lg text-white mt-0.5 block">
+                  {masteredChaptersCount} / {chapters.length}
+                </strong>
+                <span className="text-[11px] text-[#60A5FA]">
+                  Current: CH {String(currentFocusChapter.chapterNumber).padStart(2, '0')} · {currentFocusChapter.title.en}
                 </span>
               </div>
 
-              <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60">
+              <div className="p-4 rounded-2xl border border-[#1E2D4A] bg-[#0B1325]">
                 <span className="text-xs text-slate-400 block">Paper Portfolio (SIMULATION)</span>
                 <strong className="text-lg text-white mt-0.5 block">
                   ₹{profile.paperBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </strong>
-                <span className="text-[11px] text-blue-400">
-                  Max Risk Rule: {profile.maxRiskPerTradePct}% per trade
+                <span className="text-[11px] text-[#F59E0B]">
+                  ⚠ Max Risk Rule: {profile.maxRiskPerTradePct}% per trade
                 </span>
               </div>
 
-              <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60">
-                <span className="text-xs text-slate-400 block">Risk Management Score</span>
-                <strong className="text-lg text-emerald-400 mt-0.5 block">
-                  {profile.skillScores.riskManagement}%
+              <div className="p-4 rounded-2xl border border-[#1E2D4A] bg-[#0B1325]">
+                <span className="text-xs text-slate-400 block">Skills Needing Practice</span>
+                <strong
+                  className={`text-lg mt-0.5 block ${
+                    weakSkills.length > 0 ? 'text-[#F59E0B]' : 'text-[#22C55E]'
+                  }`}
+                >
+                  {weakSkills.length === 0 ? '✓ 0 Weak Skills' : `⚠ ${weakSkills.length} Concepts`}
                 </strong>
                 <span className="text-[11px] text-slate-400">
                   100% Stop-Loss Adherence
                 </span>
               </div>
 
-              <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60">
-                <span className="text-xs text-slate-400 block">Quiz & Assessment Accuracy</span>
-                <strong className="text-lg text-amber-300 mt-0.5 block">
-                  {profile.quizAccuracy}%
+              <div className="p-4 rounded-2xl border border-[#1E2D4A] bg-[#0B1325]">
+                <span className="text-xs text-slate-400 block">Current Streak &amp; Accuracy</span>
+                <strong className="text-lg text-[#60A5FA] mt-0.5 block">
+                  🔥 {profile.streakDays} Days · {profile.quizAccuracy}%
                 </strong>
                 <span className="text-[11px] text-slate-400">
-                  Across {profile.quizAttemptsCount} knowledge checks
+                  Role: {authUser.role.toUpperCase()} ({authUser.username})
                 </span>
-              </div>
-            </div>
-
-            {/* 5 Action Cards from Section 5 Specification */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {/* Card 1: Recommended Next Lesson */}
-              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="text-xs font-mono text-blue-400">
-                    Adaptive Recommendation · Weakest Area Focus
-                  </div>
-                  <h3 className="text-base font-semibold text-white">
-                    {recommendedLesson.title[lang]}
-                  </h3>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {recommendedLesson.concept[lang]}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('learn')}
-                  className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white flex items-center justify-between"
-                >
-                  <span>Start {recommendedLesson.durationMinutes}-Min Interactive Lesson</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Card 2: Daily Chart Challenge */}
-              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="text-xs font-mono text-emerald-400">
-                    Daily Practice · Bar-by-Bar Replay
-                  </div>
-                  <h3 className="text-base font-semibold text-white">
-                    {lang === 'hinglish'
-                      ? 'Historical Chart Challenge: Support, Resistance aur R:R Pehchanein'
-                      : 'Interactive Chart Challenge: Identify Structure Before Reveal'}
-                  </h3>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {lang === 'hinglish'
-                      ? 'RELIANCE aur NIFTY 50 ke chhupe hue candles ko reveal karne se pehle apna Entry, Stop-Loss aur Risk/Reward decision check karein.'
-                      : 'Test your eye on historical NSE candles with future bars hidden. Evaluate trend, support/resistance, and Risk/Reward before revealing the outcome.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('learn')}
-                  className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white flex items-center justify-between"
-                >
-                  <span>Launch Chart Challenge</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              {/* Card 3: AI Personal Trading Tutor */}
-              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="text-xs font-mono text-amber-400">
-                    5 Pedagogical Modes · English & Hinglish
-                  </div>
-                  <h3 className="text-base font-semibold text-white">
-                    {lang === 'hinglish'
-                      ? 'AI Trading Tutor & Chart Screenshot Assistant'
-                      : 'AI Personal Trading Tutor & Chart Analyzer'}
-                  </h3>
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {lang === 'hinglish'
-                      ? '"Explain Like I’m New", "Quant Mode", ya "Debug My Strategy" mein koi bhi sawaal poochein ya chart screenshot upload karein.'
-                      : 'Switch between Explain Like I’m New, Socratic Teacher Mode, Quant Mode, or upload a chart screenshot for a 6-part risk breakdown.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('tutor')}
-                  className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white flex items-center justify-between"
-                >
-                  <span>Ask AI Tutor Now</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
               </div>
             </div>
 
@@ -674,14 +1320,11 @@ export default function App() {
                         </div>
                         <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
                           <div
-                            className={`h-full rounded-full ${
-                              val >= 70
-                                ? 'bg-emerald-500'
-                                : val >= 45
-                                ? 'bg-blue-500'
-                                : 'bg-amber-500'
-                            }`}
-                            style={{ width: `${val}%` }}
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${val}%`,
+                              backgroundColor: val >= 80 ? '#22C55E' : '#6366F1',
+                            }}
                           />
                         </div>
                       </div>
@@ -719,10 +1362,11 @@ export default function App() {
                         <div className="text-right">
                           <span
                             className={
-                              t.netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                              t.netPnl >= 0 ? 'text-[#22C55E]' : 'text-[#EF4444]'
                             }
                           >
-                            {t.netPnl >= 0 ? '+' : ''}₹{t.netPnl} ({t.rMultiple}R)
+                            {t.netPnl >= 0 ? '▲ +₹' : '▼ -₹'}
+                            {Math.abs(t.netPnl)} ({t.rMultiple}R)
                           </span>
                         </div>
                       </div>
@@ -748,13 +1392,41 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: LEARN SECTION */}
+        {/* ADMIN DASHBOARD TAB (Restricted to Role === 'admin') */}
+        {activeTab === 'admin' && isAdmin && (
+          <AdminDashboardSection
+            currentUser={authUser}
+            language={profile.language}
+            chapters={chapters}
+            onUpdateChapterConfig={handleUpdateChapterConfig}
+            isPreviewAsUser={isPreviewAsUser}
+            onTogglePreviewAsUser={setIsPreviewAsUser}
+            onOpenChapterInLearn={(chId) => {
+              setActiveChapterId(chId);
+              setActiveTab('learn');
+            }}
+            onNavigateTab={setActiveTab}
+            errorReports={errorReports}
+            onResolveReport={handleResolveReport}
+            analyticsEvents={analyticsEvents}
+          />
+        )}
+
+        {/* TAB 2: LEARN SECTION (18-CHAPTER MASTERY LEARNING SYSTEM) */}
         {activeTab === 'learn' && (
           <LearnSection
             profile={profile}
-            onCompleteLesson={handleCompleteLesson}
+            chapters={chapters}
+            chapterProgressMap={effectiveChapterProgressMap}
+            weakSkills={weakSkills}
+            isAdminBypass={effectiveAdminBypass}
+            activeChapterId={activeChapterId}
+            onSelectChapter={setActiveChapterId}
+            onUpdateChapterProgress={handleUpdateChapterProgress}
+            onCompleteLessonLegacy={handleCompleteLesson}
             onCompleteChallenge={handleCompleteChallenge}
-            onNavigate={setActiveTab}
+            onNavigateTab={setActiveTab}
+            onReportIssue={handleReportIssue}
           />
         )}
 
@@ -789,6 +1461,7 @@ export default function App() {
           <AITutorSection
             profile={profile}
             onToggleLanguage={(newLang) => updateProfile({ language: newLang })}
+            onReportIssue={handleReportIssue}
           />
         )}
 
@@ -798,6 +1471,15 @@ export default function App() {
             profile={profile}
             entries={journalEntries}
             onAddEntry={(newEntry) => setJournalEntries((prev) => [newEntry, ...prev])}
+          />
+        )}
+
+        {/* TAB 7: CONTENT GOVERNANCE, DETERMINISTIC TEST SUITE & SUPABASE SCHEMA (MASTER SPEC V2) */}
+        {activeTab === 'governance' && (
+          <GovernanceStudioSection
+            language={profile.language}
+            errorReports={errorReports}
+            onResolveReport={handleResolveReport}
           />
         )}
 
@@ -972,7 +1654,7 @@ export default function App() {
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION BAR */}
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 border-t border-slate-800 bg-[#090D16]/95 backdrop-blur px-2 py-1.5 grid grid-cols-7 gap-1">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 border-t border-slate-800 bg-[#090D16]/95 backdrop-blur px-2 py-1.5 grid grid-cols-8 gap-1">
         {(
           [
             { id: 'home', label: 'Home', Icon: Home },
@@ -981,6 +1663,7 @@ export default function App() {
             { id: 'practice', label: 'Practice', Icon: Sliders },
             { id: 'tutor', label: 'AI Tutor', Icon: Bot },
             { id: 'journal', label: 'Journal', Icon: BookMarked },
+            { id: 'governance', label: 'QA Lab', Icon: ShieldCheck },
             { id: 'profile', label: 'Profile', Icon: User },
           ] as const
         ).map(({ id, label, Icon }) => (

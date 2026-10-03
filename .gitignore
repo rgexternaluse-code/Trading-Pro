@@ -6,3 +6,18 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Android
+.gradle/
+android/app/build/
+android/.gradle/
+android/build/
+android/captures/
+*.apk
+*.aab
+
+# iOS
+ios/App/build/
+ios/App/DerivedData/
+*.xcarchive
+*.ipa

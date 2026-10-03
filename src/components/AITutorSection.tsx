@@ -7,12 +7,16 @@ import {
   ShieldCheck,
   Sparkles,
   HelpCircle,
+  Flag,
 } from 'lucide-react';
-import { Language, UserProfile } from '../types';
+import { AIErrorReport, Language, UserProfile } from '../types';
 
 interface AITutorSectionProps {
   profile: UserProfile;
   onToggleLanguage: (lang: Language) => void;
+  onReportIssue?: (
+    report: Omit<AIErrorReport, 'id' | 'timestamp' | 'status'>
+  ) => void;
 }
 
 interface ChatMessage {
@@ -25,8 +29,10 @@ interface ChatMessage {
 export const AITutorSection: React.FC<AITutorSectionProps> = ({
   profile,
   onToggleLanguage,
+  onReportIssue,
 }) => {
   const lang: Language = profile.language;
+  const [flaggedIds, setFlaggedIds] = useState<string[]>([]);
   const [subTab, setSubTab] = useState<'tutor' | 'chart_assistant'>('tutor');
   const [tutorMode, setTutorMode] = useState<
     'explain_new' | 'normal' | 'quant' | 'teacher' | 'debug_strategy'
@@ -234,8 +240,11 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
       {/* Header & Mode Switcher */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold text-white">
-            AI Trading Tutor & Chart Assistant
+          <div className="text-xs font-mono text-[#14B8A6] font-semibold uppercase tracking-wider">
+            ✦ AI COACH &amp; CHART INTELLIGENCE LAYER
+          </div>
+          <h1 className="text-xl md:text-2xl font-semibold text-white mt-0.5">
+            AI Trading Coach &amp; Chart Assistant
           </h1>
           <p className="text-xs text-slate-400 mt-1">
             {lang === 'hinglish'
@@ -272,26 +281,26 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
             <button
               type="button"
               onClick={() => setSubTab('tutor')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 cursor-pointer ${
                 subTab === 'tutor'
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-[#14B8A6] text-white'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Bot className="w-3.5 h-3.5" />
-              <span>Conversational AI Tutor</span>
+              <span>✦ AI Coach Chat</span>
             </button>
             <button
               type="button"
               onClick={() => setSubTab('chart_assistant')}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 cursor-pointer ${
                 subTab === 'chart_assistant'
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-[#14B8A6] text-white'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>AI Chart Screenshot Analyzer</span>
+              <span>✦ AI Chart Analyzer</span>
             </button>
           </div>
         </div>
@@ -340,9 +349,9 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
                     key={m.id}
                     type="button"
                     onClick={() => setTutorMode(m.id)}
-                    className={`w-full text-left p-3 rounded-lg border text-xs transition-colors ${
+                    className={`w-full text-left p-3 rounded-lg border text-xs transition-colors cursor-pointer ${
                       tutorMode === m.id
-                        ? 'border-blue-500 bg-blue-950/35 text-white'
+                        ? 'border-[#14B8A6] bg-[#14B8A6]/15 text-white'
                         : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700'
                     }`}
                   >
@@ -407,10 +416,41 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
                     className={`max-w-[85%] rounded-xl p-4 text-xs md:text-sm leading-relaxed whitespace-pre-wrap ${
                       msg.role === 'user'
                         ? 'bg-blue-600 text-white'
-                        : 'bg-slate-950 border border-slate-800 text-slate-200'
+                        : 'bg-slate-950 border border-slate-800 text-slate-200 space-y-2'
                     }`}
                   >
-                    {msg.text}
+                    <div>{msg.text}</div>
+                    {msg.role === 'assistant' && (
+                      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono text-slate-400">
+                        <span>
+                          Agent Router: Hybrid Deterministic Solver + Safety Guardrail
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (flaggedIds.includes(msg.id)) return;
+                            setFlaggedIds((prev) => [...prev, msg.id]);
+                            if (onReportIssue) {
+                              onReportIssue({
+                                sourceModule: 'AI Tutor',
+                                issueType: 'Calculation / Math Mismatch',
+                                contextSnippet: msg.text.slice(0, 110) + '...',
+                                userComment:
+                                  'User flagged AI Tutor response for governance review.',
+                              });
+                            }
+                          }}
+                          className="text-rose-400 hover:underline flex items-center gap-1"
+                        >
+                          <Flag className="w-3 h-3" />
+                          <span>
+                            {flaggedIds.includes(msg.id)
+                              ? 'Reported to QA ✓'
+                              : 'Flag / Report Issue'}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -445,9 +485,9 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
               <button
                 type="submit"
                 disabled={loading || !inputPrompt.trim()}
-                className="px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                className="px-4 py-2.5 rounded-lg bg-[#14B8A6] hover:bg-[#0D9488] disabled:opacity-40 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                <span>Ask Tutor</span>
+                <span>✦ Ask AI</span>
                 <Send className="w-3.5 h-3.5" />
               </button>
             </form>
@@ -534,13 +574,13 @@ Rather than saying "Yes, buy it," let's evaluate this setup through an **8-point
               type="button"
               onClick={handleAnalyzeChart}
               disabled={chartLoading}
-              className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+              className="w-full py-2.5 rounded-lg bg-[#14B8A6] hover:bg-[#0D9488] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Sparkles className="w-4 h-4" />
               <span>
                 {chartLoading
-                  ? 'Analyzing Chart Structure...'
-                  : 'Run Structured 6-Part Chart Analysis'}
+                  ? '✦ AI Analyzing Chart Structure...'
+                  : '✦ Analyze Chart with AI'}
               </span>
             </button>
           </div>

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,6 +8,60 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// --- SERVER-SIDE AUTHENTICATION & ROLE-BASED ACCESS CONTROL (SECTION 40) ---
+const AUTH_SALT = 'ai_trading_academy_v1_salt';
+function hashCredential(secret: string): string {
+  return crypto.createHmac('sha256', AUTH_SALT).update(secret).digest('hex');
+}
+
+// Precomputed salted HMAC-SHA256 digests for default dev accounts (or env overrides)
+// Admin: UserName = Master, Pass = Master@trading_pro1
+// User:  UserName = User,   Pass = User@trading1
+const ADMIN_EXPECTED_USER = (process.env.ADMIN_USERNAME || 'Master').trim();
+const ADMIN_EXPECTED_PASS_HASH = process.env.ADMIN_PASSWORD
+  ? hashCredential(process.env.ADMIN_PASSWORD)
+  : hashCredential('Master@trading_pro1');
+
+const LEARNER_EXPECTED_USER = (process.env.USER_USERNAME || 'User').trim();
+const LEARNER_EXPECTED_PASS_HASH = process.env.USER_PASSWORD
+  ? hashCredential(process.env.USER_PASSWORD)
+  : hashCredential('User@trading1');
+
+interface ServerSessionRecord {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  role: 'admin' | 'user';
+  token: string;
+  createdAt: string;
+  expiresAt: number;
+}
+
+const activeSessions = new Map<string, ServerSessionRecord>();
+const userProgressStore = new Map<string, Record<string, any>>();
+const adminAuditLog: Array<{ id: string; timestamp: string; actor: string; action: string }> = [
+  {
+    id: 'audit-init',
+    timestamp: new Date().toISOString(),
+    actor: 'system',
+    action: 'Initialized 18-Chapter Mastery Curriculum & RBAC Security Layer',
+  },
+];
+
+function extractSession(req: express.Request): ServerSessionRecord | null {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice(7).trim();
+  const session = activeSessions.get(token);
+  if (!session) return null;
+  if (Date.now() > session.expiresAt) {
+    activeSessions.delete(token);
+    return null;
+  }
+  return session;
+}
 
 const SAFETY_POLICY_INSTRUCTION = `
 CRITICAL FINANCIAL EDUCATION SAFETY & ACCURACY POLICY (MANDATORY):
@@ -342,6 +397,249 @@ Remember: Do NOT present uncertain chart interpretations as guaranteed predictio
         error: error?.message || 'Could not analyze journal entries right now.',
       });
     }
+  });
+
+  // 5. AI Chart Drawing & Geometry Annotation Coach (Master Spec v2)
+  app.post('/api/ai/grade-annotation', async (req, res) => {
+    try {
+      const {
+        symbol,
+        drawings = [],
+        expectedSupport,
+        expectedResistance,
+        toleranceInr,
+        deterministicGrade,
+        language = 'en',
+      } = req.body;
+
+      const ai = getGenAIClient();
+      if (!ai) {
+        return res.status(503).json({
+          error: 'Gemini API key is not configured on the server.',
+        });
+      }
+
+      const langInstruction =
+        language === 'hinglish'
+          ? 'Respond in supportive, educational Hinglish (Roman Hindi + English technical terms).'
+          : 'Respond in clear, concise, educational English.';
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: `Evaluate the user's drawn chart annotations on ${symbol}.
+User Drawings: ${JSON.stringify(drawings)}
+Ground Truth Support: ₹${expectedSupport} (±₹${toleranceInr})
+Ground Truth Resistance: ₹${expectedResistance} (±₹${toleranceInr})
+Deterministic Geometry Result: ${JSON.stringify(deterministicGrade)}
+${langInstruction}`,
+        config: {
+          systemInstruction: SAFETY_POLICY_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              coachingFeedback: {
+                type: Type.STRING,
+                description:
+                  'Educational coaching explaining how close the user drawings are to structural support/resistance zones and why ±0.5x ATR zone tolerance matters.',
+              },
+            },
+            required: ['coachingFeedback'],
+          },
+        },
+      });
+
+      const parsed = JSON.parse((response.text || '{}').trim());
+      res.json(parsed);
+    } catch (error: any) {
+      res.status(500).json({
+        error: error?.message || 'Could not grade chart annotations right now.',
+      });
+    }
+  });
+
+  // --- 6. AUTHENTICATION & ROLE-BASED ACCESS ENDPOINTS (SECTION 40) ---
+  app.post('/api/auth/login', (req, res) => {
+    const { username = '', password = '' } = req.body || {};
+    const cleanUser = String(username).trim();
+    const inputPassHash = hashCredential(String(password));
+
+    let matchedAccount: Omit<ServerSessionRecord, 'token' | 'expiresAt'> | null = null;
+
+    if (
+      (cleanUser.toLowerCase() === ADMIN_EXPECTED_USER.toLowerCase() ||
+        cleanUser.toLowerCase() === 'master@tradingacademy.in') &&
+      inputPassHash === ADMIN_EXPECTED_PASS_HASH
+    ) {
+      matchedAccount = {
+        id: 'usr-admin-master',
+        username: 'Master',
+        email: 'master@tradingacademy.in',
+        displayName: 'Master (Academy Admin)',
+        role: 'admin',
+        createdAt: '2026-01-01T00:00:00Z',
+      };
+    } else if (
+      (cleanUser.toLowerCase() === LEARNER_EXPECTED_USER.toLowerCase() ||
+        cleanUser.toLowerCase() === 'user@tradingacademy.in') &&
+      inputPassHash === LEARNER_EXPECTED_PASS_HASH
+    ) {
+      matchedAccount = {
+        id: 'usr-learner-01',
+        username: 'User',
+        email: 'user@tradingacademy.in',
+        displayName: 'User (Learner Account)',
+        role: 'user',
+        createdAt: '2026-01-15T00:00:00Z',
+      };
+    }
+
+    if (!matchedAccount) {
+      return res.status(401).json({
+        error: 'Invalid Username or Password. Please verify your credentials.',
+      });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const sessionRecord: ServerSessionRecord = {
+      ...matchedAccount,
+      token,
+      expiresAt: Date.now() + 1000 * 60 * 60 * 24, // 24h session
+    };
+    activeSessions.set(token, sessionRecord);
+
+    adminAuditLog.unshift({
+      id: `audit-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${sessionRecord.username} (${sessionRecord.role})`,
+      action: `Authenticated via /api/auth/login (Role: ${sessionRecord.role.toUpperCase()})`,
+    });
+
+    return res.json({
+      user: {
+        id: sessionRecord.id,
+        username: sessionRecord.username,
+        email: sessionRecord.email,
+        displayName: sessionRecord.displayName,
+        role: sessionRecord.role,
+        token: sessionRecord.token,
+        createdAt: sessionRecord.createdAt,
+      },
+    });
+  });
+
+  app.get('/api/auth/session', (req, res) => {
+    const session = extractSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Session expired or unauthenticated.' });
+    }
+    return res.json({
+      user: {
+        id: session.id,
+        username: session.username,
+        email: session.email,
+        displayName: session.displayName,
+        role: session.role,
+        token: session.token,
+        createdAt: session.createdAt,
+      },
+    });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const session = extractSession(req);
+    if (session) {
+      activeSessions.delete(session.token);
+    }
+    return res.json({ ok: true });
+  });
+
+  // User-Isolated Mastery Progress Endpoints (Section 40.9 & 40.16)
+  app.get('/api/user/progress', (req, res) => {
+    const session = extractSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const progress = userProgressStore.get(session.id) || {};
+    return res.json({ userId: session.id, role: session.role, progress });
+  });
+
+  app.post('/api/user/progress', (req, res) => {
+    const session = extractSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const { progress } = req.body || {};
+    if (progress && typeof progress === 'object') {
+      userProgressStore.set(session.id, progress);
+    }
+    return res.json({ ok: true, userId: session.id });
+  });
+
+  // Admin-Protected Endpoints (Section 40.10: Enforced on Backend)
+  app.post('/api/admin/chapters/update', (req, res) => {
+    const session = extractSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Unauthenticated request rejected.' });
+    }
+    if (session.role !== 'admin') {
+      return res.status(403).json({
+        error: '403 Forbidden: Normal User role cannot mutate curriculum, prerequisites, or mastery thresholds.',
+      });
+    }
+    const { chapterId, masteryThreshold, prerequisiteChapterIds } = req.body || {};
+    adminAuditLog.unshift({
+      id: `audit-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      actor: `${session.username} (admin)`,
+      action: `Updated Chapter ${chapterId} rules (Mastery Threshold: ${masteryThreshold}%, Prerequisites: ${JSON.stringify(prerequisiteChapterIds)})`,
+    });
+    return res.json({
+      ok: true,
+      message: `Chapter ${chapterId} mastery configuration updated by Admin.`,
+      auditLog: adminAuditLog.slice(0, 15),
+    });
+  });
+
+  app.get('/api/admin/overview', (req, res) => {
+    const session = extractSession(req);
+    if (!session) {
+      return res.status(401).json({ error: 'Unauthenticated request rejected.' });
+    }
+    if (session.role !== 'admin') {
+      return res.status(403).json({
+        error: '403 Forbidden: Admin role required to view system analytics and all users.',
+      });
+    }
+    return res.json({
+      metrics: {
+        totalUsers: 2,
+        totalChapters: 18,
+        totalExercises: 54,
+        auditEventsCount: adminAuditLog.length,
+      },
+      users: [
+        {
+          id: 'usr-admin-master',
+          username: 'Master',
+          email: 'master@tradingacademy.in',
+          role: 'admin',
+          chaptersMastered: 18,
+          status: 'Active · Full Access',
+        },
+        {
+          id: 'usr-learner-01',
+          username: 'User',
+          email: 'user@tradingacademy.in',
+          role: 'user',
+          chaptersMastered: Object.values(userProgressStore.get('usr-learner-01') || {}).filter(
+            (p: any) => p?.status === 'mastered'
+          ).length,
+          status: 'Active · Mastery-Gated Path',
+        },
+      ],
+      auditLog: adminAuditLog.slice(0, 15),
+    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

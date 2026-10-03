@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { OHLCVCandle } from '../types';
+import { colors } from '../theme/colors';
 
 interface InteractiveCandlestickChartProps {
   symbol: string;
@@ -179,14 +180,14 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                   y1={y}
                   x2={svgWidth - padRight}
                   y2={y}
-                  stroke="#1e293b"
+                  stroke={colors.chart.gridDark}
                   strokeDasharray="3 3"
                   strokeWidth={1}
                 />
                 <text
                   x={svgWidth - padRight + 6}
                   y={y + 4}
-                  fill="#64748b"
+                  fill={colors.dark.textMuted}
                   fontSize="10"
                   fontFamily="JetBrains Mono, monospace"
                 >
@@ -204,14 +205,14 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                 y1={yForPrice(supportLevel)}
                 x2={svgWidth - padRight}
                 y2={yForPrice(supportLevel)}
-                stroke="#10b981"
+                stroke={colors.semantic.positive}
                 strokeWidth={1.2}
                 strokeDasharray="5 4"
               />
               <text
                 x={padLeft + 6}
                 y={yForPrice(supportLevel) - 5}
-                fill="#10b981"
+                fill={colors.semantic.positive}
                 fontSize="10"
                 fontFamily="JetBrains Mono, monospace"
               >
@@ -228,14 +229,14 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                 y1={yForPrice(resistanceLevel)}
                 x2={svgWidth - padRight}
                 y2={yForPrice(resistanceLevel)}
-                stroke="#f43f5e"
+                stroke={colors.semantic.negative}
                 strokeWidth={1.2}
                 strokeDasharray="5 4"
               />
               <text
                 x={padLeft + 6}
                 y={yForPrice(resistanceLevel) - 5}
-                fill="#f43f5e"
+                fill={colors.semantic.negative}
                 fontSize="10"
                 fontFamily="JetBrains Mono, monospace"
               >
@@ -252,13 +253,13 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                 y1={yForPrice(entryLevel)}
                 x2={svgWidth - padRight}
                 y2={yForPrice(entryLevel)}
-                stroke="#38bdf8"
+                stroke={colors.semantic.primary}
                 strokeWidth={1.5}
               />
               <text
                 x={svgWidth - padRight - 110}
                 y={yForPrice(entryLevel) - 4}
-                fill="#38bdf8"
+                fill={colors.semantic.primary}
                 fontSize="10"
                 fontFamily="JetBrains Mono, monospace"
               >
@@ -273,13 +274,13 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                 y1={yForPrice(stopLevel)}
                 x2={svgWidth - padRight}
                 y2={yForPrice(stopLevel)}
-                stroke="#ef4444"
+                stroke={colors.semantic.negative}
                 strokeWidth={1.5}
               />
               <text
                 x={svgWidth - padRight - 110}
                 y={yForPrice(stopLevel) + 12}
-                fill="#ef4444"
+                fill={colors.semantic.negative}
                 fontSize="10"
                 fontFamily="JetBrains Mono, monospace"
               >
@@ -294,13 +295,13 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                 y1={yForPrice(targetLevel)}
                 x2={svgWidth - padRight}
                 y2={yForPrice(targetLevel)}
-                stroke="#22c55e"
+                stroke={colors.semantic.positive}
                 strokeWidth={1.5}
               />
               <text
                 x={svgWidth - padRight - 110}
                 y={yForPrice(targetLevel) - 4}
-                fill="#22c55e"
+                fill={colors.semantic.positive}
                 fontSize="10"
                 fontFamily="JetBrains Mono, monospace"
               >
@@ -309,28 +310,28 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
             </g>
           )}
 
-          {/* EMA20 Line */}
+          {/* EMA20 Line (Brand Indigo #6366F1) */}
           {emaVisible && emaPoints && (
             <polyline
               fill="none"
-              stroke="#3b82f6"
+              stroke={colors.chart.indicatorPrimary}
               strokeWidth={1.8}
               points={emaPoints}
             />
           )}
 
-          {/* VWAP Line */}
+          {/* VWAP Line (Warning Amber #F59E0B) */}
           {vwapVisible && vwapPoints && (
             <polyline
               fill="none"
-              stroke="#f59e0b"
+              stroke={colors.chart.indicatorWarning}
               strokeWidth={1.5}
               strokeDasharray="3 2"
               points={vwapPoints}
             />
           )}
 
-          {/* Candles + Volume */}
+          {/* Candles + Volume (STRICT: #22C55E Bullish, #EF4444 Bearish) */}
           {activeCandles.map((c, idx) => {
             const centerX = padLeft + idx * stepX + stepX / 2;
             const highY = yForPrice(c.high);
@@ -338,7 +339,9 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
             const openY = yForPrice(c.open);
             const closeY = yForPrice(c.close);
             const bull = c.close >= c.open;
-            const color = bull ? '#10b981' : '#ef4444';
+            const color = bull
+              ? colors.chart.bullishCandle
+              : colors.chart.bearishCandle;
             const bodyTop = Math.min(openY, closeY);
             const bodyHeight = Math.max(2, Math.abs(closeY - openY));
 
@@ -365,7 +368,7 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                     y1={padTop}
                     x2={centerX}
                     y2={svgHeight - 16}
-                    stroke="#475569"
+                    stroke={colors.chart.crosshair}
                     strokeDasharray="2 2"
                     strokeWidth={1}
                   />
@@ -394,7 +397,11 @@ export const InteractiveCandlestickChart: React.FC<InteractiveCandlestickChartPr
                   y={volY}
                   width={candleWidth}
                   height={volBarHeight}
-                  fill={bull ? 'rgba(16,185,129,0.28)' : 'rgba(239,68,68,0.28)'}
+                  fill={
+                    bull
+                      ? colors.chart.bullishVolume
+                      : colors.chart.bearishVolume
+                  }
                 />
               </g>
             );

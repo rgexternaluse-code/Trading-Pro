@@ -1,14 +1,54 @@
 @import "tailwindcss";
 
 @layer base {
-  :root {
+  :root,
+  [data-theme="dark"] {
+    --bg-app: #0B1020;
+    --bg-surface: #111827;
+    --bg-elevated: #182033;
+    --border-subtle: #263149;
+
+    --text-primary: #F8FAFC;
+    --text-secondary: #CBD5E1;
+    --text-muted: #94A3B8;
+    --text-disabled: #64748B;
+
+    --color-primary: #6366F1;
+    --color-ai: #14B8A6;
+    --color-positive: #22C55E;
+    --color-warning: #F59E0B;
+    --color-negative: #EF4444;
+    --chart-grid: #263149;
+
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   }
 
+  [data-theme="light"] {
+    --bg-app: #F7F8FC;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #FFFFFF;
+    --border-subtle: #E2E8F0;
+
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-muted: #64748B;
+    --text-disabled: #94A3B8;
+
+    --color-primary: #6366F1;
+    --color-ai: #14B8A6;
+    --color-positive: #22C55E;
+    --color-warning: #F59E0B;
+    --color-negative: #EF4444;
+    --chart-grid: #E2E8F0;
+  }
+
   body {
+    background-color: var(--bg-app);
+    color: var(--text-primary);
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.18s ease, color 0.18s ease;
   }
 
   code, pre, .font-mono {
@@ -19,4 +59,156 @@
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Centralized Semantic & Neutral Theme Token Adaptation */
+[data-theme="dark"] .bg-slate-950,
+[data-theme="dark"] .bg-\[\#070A12\],
+[data-theme="dark"] .bg-\[\#0B1020\] {
+  background-color: #070D19 !important;
+}
+
+[data-theme="dark"] .bg-slate-900,
+[data-theme="dark"] .bg-slate-900\/60,
+[data-theme="dark"] .bg-slate-900\/70,
+[data-theme="dark"] .bg-slate-900\/80 {
+  background-color: #0B1325 !important;
+}
+
+[data-theme="dark"] .bg-slate-800 {
+  background-color: #101C34 !important;
+}
+
+[data-theme="dark"] .border-slate-800,
+[data-theme="dark"] .border-slate-800\/80,
+[data-theme="dark"] .border-slate-700 {
+  border-color: #1E2D4A !important;
+}
+
+/* Light Theme Neutral Surface Overrides for High Readability */
+[data-theme="light"] .bg-\[\#070A12\],
+[data-theme="light"] .bg-\[\#070D19\],
+[data-theme="light"] .bg-\[\#0B1020\],
+[data-theme="light"] .bg-\[\#101C34\],
+[data-theme="light"] .bg-slate-950,
+[data-theme="light"] .bg-slate-950\/90,
+[data-theme="light"] .bg-slate-950\/80,
+[data-theme="light"] .bg-slate-950\/60 {
+  background-color: #F7F8FC !important;
+}
+
+[data-theme="light"] .bg-slate-900,
+[data-theme="light"] .bg-slate-900\/60,
+[data-theme="light"] .bg-slate-900\/70,
+[data-theme="light"] .bg-slate-900\/80,
+[data-theme="light"] .bg-slate-900\/90,
+[data-theme="light"] .bg-\[\#0B1325\],
+[data-theme="light"] .bg-\[\#111827\] {
+  background-color: #FFFFFF !important;
+}
+
+[data-theme="light"] .bg-slate-800 {
+  background-color: #F1F5F9 !important;
+}
+
+[data-theme="light"] .border-slate-800,
+[data-theme="light"] .border-slate-800\/80,
+[data-theme="light"] .border-slate-800\/70,
+[data-theme="light"] .border-slate-700,
+[data-theme="light"] .border-slate-900,
+[data-theme="light"] .border-\[\#1E2D4A\],
+[data-theme="light"] .border-\[\#223254\],
+[data-theme="light"] .border-\[\#263149\] {
+  border-color: #E2E8F0 !important;
+}
+
+[data-theme="light"] .text-white,
+[data-theme="light"] .text-slate-100,
+[data-theme="light"] .text-\[\#F8FAFC\] {
+  color: #0F172A !important;
+}
+
+[data-theme="light"] .text-slate-200,
+[data-theme="light"] .text-slate-300,
+[data-theme="light"] .text-\[\#CBD5E1\] {
+  color: #475569 !important;
+}
+
+[data-theme="light"] .text-slate-400,
+[data-theme="light"] .text-slate-500,
+[data-theme="light"] .text-\[\#94A3B8\] {
+  color: #64748B !important;
+}
+
+/* Preserve white text inside semantic primary/AI/positive/negative buttons in Light Theme */
+[data-theme="light"] .bg-indigo-600,
+[data-theme="light"] .bg-\[\#6366F1\],
+[data-theme="light"] .bg-teal-600,
+[data-theme="light"] .bg-\[\#14B8A6\],
+[data-theme="light"] .bg-blue-600,
+[data-theme="light"] .bg-emerald-600,
+[data-theme="light"] .bg-rose-600 {
+  color: #FFFFFF !important;
+}
+
+[data-theme="light"] .bg-indigo-600 *,
+[data-theme="light"] .bg-\[\#6366F1\] *,
+[data-theme="light"] .bg-teal-600 *,
+[data-theme="light"] .bg-\[\#14B8A6\] *,
+[data-theme="light"] .bg-blue-600 *,
+[data-theme="light"] .bg-emerald-600 *,
+[data-theme="light"] .bg-rose-600 * {
+  color: #FFFFFF !important;
+}
+
+/* Map legacy primary blue classes to Brand Indigo (#6366F1) across all screens */
+.bg-blue-600 {
+  background-color: #6366F1 !important;
+}
+.hover\:bg-blue-500:hover {
+  background-color: #4F46E5 !important;
+}
+.text-blue-400,
+.text-blue-300 {
+  color: #6366F1 !important;
+}
+.border-blue-500,
+.border-blue-500\/40,
+.border-blue-500\/30 {
+  border-color: rgba(99, 102, 241, 0.45) !important;
+}
+.bg-blue-950\/30,
+.bg-blue-950\/40,
+.bg-blue-950\/50,
+.bg-blue-600\/20,
+.bg-blue-600\/25 {
+  background-color: rgba(99, 102, 241, 0.14) !important;
+}
+
+/* Map positive/negative classes to strict Positive Green (#22C55E) and Negative Red (#EF4444) */
+.text-emerald-400,
+.text-emerald-300 {
+  color: #22C55E !important;
+}
+[data-theme="light"] .text-emerald-400,
+[data-theme="light"] .text-emerald-300 {
+  color: #16A34A !important;
+}
+
+.text-rose-400,
+.text-rose-300 {
+  color: #EF4444 !important;
+}
+[data-theme="light"] .text-rose-400,
+[data-theme="light"] .text-rose-300 {
+  color: #DC2626 !important;
+}
+
+.text-amber-400,
+.text-amber-300 {
+  color: #F59E0B !important;
+}
+[data-theme="light"] .text-amber-400,
+[data-theme="light"] .text-amber-300 {
+  color: #D97706 !important;
 }

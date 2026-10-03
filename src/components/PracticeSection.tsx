@@ -178,6 +178,47 @@ export const PracticeSection: React.FC<PracticeSectionProps> = ({
     sipFutureValue / Math.pow(1 + inflationRate / 100, sipYears)
   );
 
+  // V2 Calculator 3: Drawdown Recovery & Losing Streak Survival State
+  const [ddLossPct, setDdLossPct] = useState<number>(25);
+  const [streakCount, setStreakCount] = useState<number>(6);
+  const ddRecoveryRequiredPct = Number(
+    ((ddLossPct / Math.max(1, 100 - ddLossPct)) * 100).toFixed(1)
+  );
+
+  // V2 Calculator 4: Expectancy & Monte Carlo Distribution State
+  const [mcWinRate, setMcWinRate] = useState<number>(45);
+  const [mcAvgWinR, setMcAvgWinR] = useState<number>(2.5);
+  const [mcAvgLossR, setMcAvgLossR] = useState<number>(1.0);
+  const [mcTradesCount, setMcTradesCount] = useState<number>(50);
+  const mcExpectancyR = Number(
+    (
+      (mcWinRate / 100) * mcAvgWinR -
+      ((100 - mcWinRate) / 100) * mcAvgLossR
+    ).toFixed(2)
+  );
+  const mcProfitFactor = Number(
+    (
+      ((mcWinRate / 100) * mcAvgWinR) /
+      Math.max(0.01, ((100 - mcWinRate) / 100) * mcAvgLossR)
+    ).toFixed(2)
+  );
+  const mcExpectedNetR = Number((mcExpectancyR * mcTradesCount).toFixed(1));
+
+  // V2 Calculator 5: Indian Brokerage, STT, Exchange, SEBI & GST Exact Breakeven Calculator
+  const [feeBuyPrice, setFeeBuyPrice] = useState<number>(1500);
+  const [feeSellPrice, setFeeSellPrice] = useState<number>(1512);
+  const [feeQty, setFeeQty] = useState<number>(100);
+  const [feeMode, setFeeMode] = useState<'intraday' | 'delivery' | 'options'>('intraday');
+  const feeBreakdown = calculateIndianTradeCharges({
+    buyPrice: feeBuyPrice,
+    sellPrice: feeSellPrice,
+    quantity: feeQty,
+    mode: feeMode,
+  });
+  const breakevenMovePerShare = Number(
+    (feeBreakdown.totalCharges / Math.max(1, feeQty)).toFixed(2)
+  );
+
   // Strategy Builder & Backtester State (Section 15 & 16)
   const [strategy, setStrategy] = useState<StrategyConfig>({
     id: 'strat-1',
@@ -1014,6 +1055,271 @@ export const PracticeSection: React.FC<PracticeSectionProps> = ({
                 </span>
                 <strong className="text-amber-300">
                   ₹{sipInflationAdjusted.toLocaleString('en-IN')}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Calculator 3: Non-Linear Drawdown Recovery & Losing Streak Survival */}
+          <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5 space-y-4">
+            <div className="border-b border-slate-800 pb-3">
+              <div className="text-xs text-rose-400 font-mono">
+                Capital Preservation Math · Master Spec v2
+              </div>
+              <h2 className="text-base font-semibold text-white mt-0.5">
+                Drawdown Recovery & Losing Streak Survival Calculator
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1">Account Drawdown (%)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={95}
+                  value={ddLossPct}
+                  onChange={(e) =>
+                    setDdLossPct(Math.min(95, Math.max(1, Number(e.target.value))))
+                  }
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Consecutive Losses (N)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={25}
+                  value={streakCount}
+                  onChange={(e) =>
+                    setStreakCount(Math.min(25, Math.max(1, Number(e.target.value))))
+                  }
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-2 font-mono text-xs tabular-nums">
+              <div className="text-rose-400 font-semibold">
+                Formula: Recovery % = Drawdown % ÷ (100% − Drawdown %)
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">
+                  Gain Required to Recover from -{ddLossPct}% Drawdown:
+                </span>
+                <strong className="text-amber-300 text-sm">
+                  +{ddRecoveryRequiredPct}% Return Needed
+                </strong>
+              </div>
+              <div className="border-t border-slate-800 pt-2 space-y-1">
+                <div className="text-slate-300">
+                  Remaining Capital After {streakCount} Consecutive Losses:
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">At 1% Risk / Trade:</span>
+                  <strong className="text-emerald-400">
+                    {(Math.pow(0.99, streakCount) * 100).toFixed(1)}% remaining
+                  </strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">At 5% Risk / Trade (Over-leveraged):</span>
+                  <strong className="text-rose-400">
+                    {(Math.pow(0.95, streakCount) * 100).toFixed(1)}% remaining
+                  </strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Calculator 4: Expectancy & Probabilistic Edge Simulator */}
+          <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5 space-y-4">
+            <div className="border-b border-slate-800 pb-3">
+              <div className="text-xs text-sky-400 font-mono">
+                Statistical Edge Engine · Master Spec v2
+              </div>
+              <h2 className="text-base font-semibold text-white mt-0.5">
+                Trade Expectancy, Profit Factor & Sample Horizon Simulator
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1">Win Rate (%)</label>
+                <input
+                  type="number"
+                  min={5}
+                  max={95}
+                  value={mcWinRate}
+                  onChange={(e) => setMcWinRate(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Avg Win (R)</label>
+                <input
+                  type="number"
+                  step="0.25"
+                  value={mcAvgWinR}
+                  onChange={(e) => setMcAvgWinR(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Avg Loss (R)</label>
+                <input
+                  type="number"
+                  step="0.25"
+                  value={mcAvgLossR}
+                  onChange={(e) => setMcAvgLossR(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1"># of Trades</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={500}
+                  value={mcTradesCount}
+                  onChange={(e) => setMcTradesCount(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-2 font-mono text-xs tabular-nums">
+              <div className="text-sky-400 font-semibold">
+                Formula: E = (Win% × AvgWinR) − (Loss% × AvgLossR)
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Mathematical Expectancy per Trade:</span>
+                <strong
+                  className={
+                    mcExpectancyR > 0 ? 'text-emerald-400 text-sm' : 'text-rose-400 text-sm'
+                  }
+                >
+                  {mcExpectancyR > 0 ? '+' : ''}
+                  {mcExpectancyR}R per trade
+                </strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Profit Factor (Gross Win ÷ Gross Loss):</span>
+                <strong className="text-white">{mcProfitFactor}</strong>
+              </div>
+              <div className="flex justify-between border-t border-slate-800 pt-2">
+                <span className="text-slate-400">
+                  Expected Cumulative Edge over {mcTradesCount} Trades:
+                </span>
+                <strong
+                  className={
+                    mcExpectedNetR >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }
+                >
+                  {mcExpectedNetR >= 0 ? '+' : ''}
+                  {mcExpectedNetR}R (at 1% risk = {mcExpectedNetR >= 0 ? '+' : ''}
+                  {mcExpectedNetR}% capital)
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Calculator 5: Indian Brokerage, STT, Exchange Levy, SEBI & GST Breakeven Calculator */}
+          <div className="lg:col-span-2 border border-slate-800 bg-slate-900/60 rounded-xl p-5 space-y-4">
+            <div className="border-b border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs text-amber-400 font-mono">
+                  Indian Regulatory Cost Engine · NSE/BSE STT + SEBI + GST
+                </div>
+                <h2 className="text-base font-semibold text-white mt-0.5">
+                  Indian Brokerage, STT, Stamp Duty & Exact Breakeven Calculator
+                </h2>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {(['intraday', 'delivery', 'options'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setFeeMode(m)}
+                    className={`px-3 py-1 rounded text-xs font-mono capitalize border ${
+                      feeMode === m
+                        ? 'border-blue-500 bg-blue-950/40 text-blue-300'
+                        : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
+              <div>
+                <label className="block text-slate-400 mb-1">Buy Price (₹)</label>
+                <input
+                  type="number"
+                  value={feeBuyPrice}
+                  onChange={(e) => setFeeBuyPrice(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Sell Price (₹)</label>
+                <input
+                  type="number"
+                  value={feeSellPrice}
+                  onChange={(e) => setFeeSellPrice(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Quantity (Shares / Units)</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={feeQty}
+                  onChange={(e) => setFeeQty(Math.max(1, Number(e.target.value)))}
+                  className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-800 text-white"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 p-4 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs tabular-nums">
+              <div>
+                <span className="text-slate-400 block">Gross P&L</span>
+                <strong className="text-white">₹{feeBreakdown.grossPnl}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 block">Brokerage</span>
+                <strong className="text-slate-300">₹{feeBreakdown.brokerage}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 block">STT / CTT</span>
+                <strong className="text-slate-300">₹{feeBreakdown.stt}</strong>
+              </div>
+              <div>
+                <span className="text-slate-400 block">Exch + GST + Stamp</span>
+                <strong className="text-slate-300">
+                  ₹
+                  {(
+                    feeBreakdown.exchangeCharges +
+                    feeBreakdown.gst +
+                    feeBreakdown.stampDuty
+                  ).toFixed(2)}
+                </strong>
+              </div>
+              <div>
+                <span className="text-amber-300 block">Breakeven Move</span>
+                <strong className="text-amber-300">+₹{breakevenMovePerShare}/sh</strong>
+              </div>
+              <div>
+                <span className="text-emerald-400 block">Net Realized P&L</span>
+                <strong
+                  className={
+                    feeBreakdown.netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }
+                >
+                  ₹{feeBreakdown.netPnl}
                 </strong>
               </div>
             </div>

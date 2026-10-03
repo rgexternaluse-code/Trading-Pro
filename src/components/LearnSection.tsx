@@ -1,648 +1,1412 @@
 import React, { useState } from 'react';
 import {
-  BookOpen,
   CheckCircle2,
-  ChevronRight,
+  Lock,
+  Play,
+  ArrowRight,
+  AlertTriangle,
   Eye,
   RotateCcw,
-  ShieldAlert,
-  Target,
-  Brain,
-  BarChart2,
+  Award,
+  Sparkles,
+  BookOpen,
 } from 'lucide-react';
-import { COURSE_PATHS } from '../data/curriculumData';
-import { BEHAVIORAL_SCENARIOS, CHART_CHALLENGES } from '../data/challengesAndGlossary';
+import {
+  AIErrorReport,
+  ChapterDefinition,
+  ChapterStageCategory,
+  Language,
+  NavigationTab,
+  UserChapterProgress,
+  UserProfile,
+  UserWeakSkill,
+} from '../types';
+import {
+  computeChapterStatus,
+  evaluateChapterAssessment,
+  getStatusBadgeMeta,
+} from '../services/masteryEngine';
+import {
+  BEHAVIORAL_SCENARIOS,
+  CHART_CHALLENGES,
+} from '../data/challengesAndGlossary';
 import { INDIAN_MARKET_ASSETS } from '../data/indianMarketData';
-import { Language, Lesson, NavigationTab, SkillLevel, UserProfile } from '../types';
 import { InteractiveCandlestickChart } from './InteractiveCandlestickChart';
+import { InteractiveExerciseSuite } from './InteractiveExerciseSuite';
 
 interface LearnSectionProps {
   profile: UserProfile;
-  onCompleteLesson: (lesson: Lesson, quizCorrect: boolean) => void;
-  onCompleteChallenge: (challengeId: string) => void;
-  onNavigate: (tab: NavigationTab) => void;
+  chapters: ChapterDefinition[];
+  chapterProgressMap: Record<string, UserChapterProgress>;
+  weakSkills: UserWeakSkill[];
+  isAdminBypass: boolean;
+  activeChapterId: string;
+  onSelectChapter: (chapterId: string) => void;
+  onUpdateChapterProgress: (
+    chapterId: string,
+    updated: UserChapterProgress,
+    updatedWeakSkills?: UserWeakSkill[],
+    eventType?:
+      | 'lesson_completed'
+      | 'practice_completed'
+      | 'assessment_completed'
+      | 'chapter_mastered'
+      | 'chapter_failed'
+      | 'targeted_practice_completed',
+    details?: string
+  ) => void;
+  onCompleteLessonLegacy: (lessonId: string, quizCorrect: boolean) => void;
+  onCompleteChallenge: (challengeId: string, correctCount: number) => void;
+  onNavigateTab: (tab: NavigationTab) => void;
+  onReportIssue?: (
+    report: Omit<AIErrorReport, 'id' | 'timestamp' | 'status'>
+  ) => void;
 }
+
+const STAGE_CATEGORIES: ChapterStageCategory[] = [
+  'Foundation',
+  'Core Trading',
+  'Risk',
+  'Strategy',
+  'Advanced',
+];
 
 export const LearnSection: React.FC<LearnSectionProps> = ({
   profile,
-  onCompleteLesson,
+  chapters,
+  chapterProgressMap,
+  weakSkills,
+  isAdminBypass,
+  activeChapterId,
+  onSelectChapter,
+  onUpdateChapterProgress,
+  onCompleteLessonLegacy,
   onCompleteChallenge,
-  onNavigate,
+  onNavigateTab,
+  onReportIssue,
 }) => {
   const lang: Language = profile.language;
-  const [subTab, setSubTab] = useState<'courses' | 'challenge' | 'psychology'>('courses');
-  const [levelFilter, setLevelFilter] = useState<'all' | SkillLevel>('all');
 
-  const allLessons = COURSE_PATHS.flatMap((p) => p.lessons);
-  const [activeLessonId, setActiveLessonId] = useState<string>(allLessons[0].id);
-  const [selectedQuizOption, setSelectedQuizOption] = useState<number | null>(null);
-  const [quizSubmitted, setQuizSubmitted] = useState<boolean>(false);
+  const [subTab, setSubTab] = useState<
+    'journey' | 'exercises_v2' | 'chart_challenge' | 'psychology_lab'
+  >('journey');
+
+  // Inside Chapter Workspace: 'lessons' | 'practice' | 'assessment' | 'remediation'
+  const [chapterStep, setChapterStep] = useState<
+    'lessons' | 'practice' | 'assessment' | 'remediation'
+  >('lessons');
+  const [activeLessonIndex, setActiveLessonIndex] = useState(0);
+  const [quickCheckChoice, setQuickCheckChoice] = useState<number | null>(null);
+  const [quickCheckChecked, setQuickCheckChecked] = useState(false);
+
+  // Practice Activity state
+  const [practiceNumericInputs, setPracticeNumericInputs] = useState<
+    Record<string, string>
+  >({});
+  const [practiceOptionChoices, setPracticeOptionChoices] = useState<
+    Record<string, number>
+  >({});
+  const [practiceFeedback, setPracticeFeedback] = useState<
+    Record<string, { passed: boolean; message: string }>
+  >({});
+
+  // Assessment state
+  const [assessmentAnswers, setAssessmentAnswers] = useState<
+    Record<string, number>
+  >({});
+  const [assessmentResult, setAssessmentResult] = useState<{
+    scorePct: number;
+    mastered: boolean;
+    criticalConceptsPassed: boolean;
+    weakConceptIds: string[];
+  } | null>(null);
+
+  // Preview state for locked chapters (Section 13: Flexible Exploration)
+  const [previewLockedChapterId, setPreviewLockedChapterId] = useState<
+    string | null
+  >(null);
 
   // Chart Challenge state
-  const [activeChallengeIdx, setActiveChallengeIdx] = useState<number>(0);
-  const [trendAns, setTrendAns] = useState<number | null>(null);
-  const [actionAns, setActionAns] = useState<number | null>(null);
-  const [candlesRevealed, setCandlesRevealed] = useState<boolean>(false);
+  const [activeChallengeIdx, setActiveChallengeIdx] = useState(0);
+  const [revealedBars, setRevealedBars] = useState(false);
 
-  // Behavioral Scenario state
-  const [scenarioAnswers, setScenarioAnswers] = useState<Record<string, number>>({});
+  // Behavioral Lab state
+  const [scenarioIdx, setScenarioIdx] = useState(0);
+  const [scenarioPick, setScenarioPick] = useState<number | null>(null);
+
+  const currentChapter =
+    chapters.find((c) => c.id === activeChapterId) || chapters[0];
+  const currentStatus = computeChapterStatus(
+    currentChapter,
+    chapterProgressMap,
+    isAdminBypass
+  );
+  const isLocked = currentStatus === 'locked' && !isAdminBypass;
+  const isPreviewMode = isLocked && previewLockedChapterId === currentChapter.id;
+
+  const existingProgress: UserChapterProgress = chapterProgressMap[
+    currentChapter.id
+  ] || {
+    userId: profile.name,
+    chapterId: currentChapter.id,
+    status: isLocked ? 'locked' : 'available',
+    completedLessonIds: [],
+    completedPracticeIds: [],
+    lessonProgress: 0,
+    practiceProgress: 0,
+    criticalConceptsPassed: false,
+    weakConceptIds: [],
+    attemptsCount: 0,
+  };
+
+  const allLessonsCompleted = currentChapter.lessons.every((l) =>
+    existingProgress.completedLessonIds.includes(l.id)
+  );
+  const allPracticeCompleted = currentChapter.practiceActivities.every((p) =>
+    existingProgress.completedPracticeIds.includes(p.id)
+  );
+  const canTakeAssessment =
+    isAdminBypass || (allLessonsCompleted && allPracticeCompleted);
 
   const activeLesson =
-    allLessons.find((l) => l.id === activeLessonId) || allLessons[0];
+    currentChapter.lessons[
+      Math.min(activeLessonIndex, currentChapter.lessons.length - 1)
+    ] || currentChapter.lessons[0];
 
-  const lessonAsset =
-    INDIAN_MARKET_ASSETS.find((a) => a.symbol === activeLesson.visualChartSymbol) ||
-    INDIAN_MARKET_ASSETS[0];
-
-  const filteredPaths =
-    levelFilter === 'all'
-      ? COURSE_PATHS
-      : COURSE_PATHS.filter((p) => p.level === levelFilter);
-
-  const handleSelectLesson = (id: string) => {
-    setActiveLessonId(id);
-    setSelectedQuizOption(null);
-    setQuizSubmitted(false);
+  const handleSelectChapterCard = (ch: ChapterDefinition) => {
+    const st = computeChapterStatus(ch, chapterProgressMap, isAdminBypass);
+    onSelectChapter(ch.id);
+    setActiveLessonIndex(0);
+    setQuickCheckChoice(null);
+    setQuickCheckChecked(false);
+    setAssessmentResult(null);
+    setAssessmentAnswers({});
+    if (st === 'locked' && !isAdminBypass) {
+      setPreviewLockedChapterId(ch.id);
+      setChapterStep('lessons');
+    } else {
+      setPreviewLockedChapterId(null);
+      setChapterStep('lessons');
+    }
   };
 
-  const handleQuizSubmit = () => {
-    if (selectedQuizOption === null) return;
-    setQuizSubmitted(true);
-    const q = activeLesson.quiz[0];
-    const isCorrect = selectedQuizOption === q.correctIndex;
-    onCompleteLesson(activeLesson, isCorrect);
+  const handleCompleteCurrentLesson = () => {
+    if (isLocked) return;
+    if (quickCheckChoice === null) return;
+    setQuickCheckChecked(true);
+    const isRight = quickCheckChoice === activeLesson.quickCheck.correctIndex;
+    onCompleteLessonLegacy(activeLesson.id, isRight);
+
+    const updatedLessonIds = Array.from(
+      new Set([...existingProgress.completedLessonIds, activeLesson.id])
+    );
+    const lessonProgress = Math.round(
+      (updatedLessonIds.length / Math.max(1, currentChapter.lessons.length)) *
+        100
+    );
+
+    const updated: UserChapterProgress = {
+      ...existingProgress,
+      status:
+        existingProgress.status === 'mastered'
+          ? 'mastered'
+          : lessonProgress === 100
+          ? 'practice'
+          : 'learning',
+      completedLessonIds: updatedLessonIds,
+      lessonProgress,
+      lastActivityAt: new Date().toISOString(),
+    };
+
+    onUpdateChapterProgress(
+      currentChapter.id,
+      updated,
+      undefined,
+      'lesson_completed',
+      `Completed lesson ${activeLesson.title.en}`
+    );
   };
+
+  const handleVerifyPracticeActivity = (activityId: string) => {
+    if (isLocked) return;
+    const act = currentChapter.practiceActivities.find(
+      (a) => a.id === activityId
+    );
+    if (!act) return;
+
+    let passed = false;
+    if (act.type === 'numeric_calc' && act.expectedNumeric !== undefined) {
+      const val = Number(practiceNumericInputs[activityId]);
+      const tol = act.numericTolerance ?? 0.05;
+      passed =
+        !Number.isNaN(val) && Math.abs(val - act.expectedNumeric) <= tol;
+    } else if (act.options && act.correctOptionIndex !== undefined) {
+      passed = practiceOptionChoices[activityId] === act.correctOptionIndex;
+    }
+
+    setPracticeFeedback((prev) => ({
+      ...prev,
+      [activityId]: {
+        passed,
+        message: passed
+          ? `✓ Correct! ${act.explanation[lang]}`
+          : `✕ Check your calculation/logic. Hint: ${act.hint[lang]}`,
+      },
+    }));
+
+    if (passed) {
+      const updatedPracticeIds = Array.from(
+        new Set([...existingProgress.completedPracticeIds, activityId])
+      );
+      const practiceProgress = Math.round(
+        (updatedPracticeIds.length /
+          Math.max(1, currentChapter.practiceActivities.length)) *
+          100
+      );
+      const updated: UserChapterProgress = {
+        ...existingProgress,
+        status:
+          existingProgress.status === 'mastered'
+            ? 'mastered'
+            : practiceProgress === 100 && allLessonsCompleted
+            ? 'assessment'
+            : 'practice',
+        completedPracticeIds: updatedPracticeIds,
+        practiceProgress,
+        lastActivityAt: new Date().toISOString(),
+      };
+      onUpdateChapterProgress(
+        currentChapter.id,
+        updated,
+        undefined,
+        'practice_completed',
+        `Completed practice ${act.title.en}`
+      );
+    }
+  };
+
+  const handleSubmitChapterAssessment = () => {
+    if (isLocked) return;
+    const evaluation = evaluateChapterAssessment(
+      currentChapter,
+      assessmentAnswers,
+      existingProgress,
+      weakSkills
+    );
+
+    setAssessmentResult({
+      scorePct: evaluation.scorePct,
+      mastered: evaluation.mastered,
+      criticalConceptsPassed: evaluation.criticalConceptsPassed,
+      weakConceptIds: evaluation.weakConceptIds,
+    });
+
+    onUpdateChapterProgress(
+      currentChapter.id,
+      evaluation.updatedProgress,
+      evaluation.updatedWeakSkills,
+      evaluation.mastered ? 'chapter_mastered' : 'chapter_failed',
+      `Assessment Score: ${evaluation.scorePct}% (${
+        evaluation.mastered ? 'MASTERED' : 'NEEDS REVIEW'
+      })`
+    );
+  };
+
+  const handleCompleteTargetedRemediation = () => {
+    // Clears needs_review weak concepts after targeted practice and returns to assessment retry
+    const updatedWeak = weakSkills.filter(
+      (w) => w.chapterId !== currentChapter.id
+    );
+    const updated: UserChapterProgress = {
+      ...existingProgress,
+      status: 'assessment',
+      weakConceptIds: [],
+      lastActivityAt: new Date().toISOString(),
+    };
+    onUpdateChapterProgress(
+      currentChapter.id,
+      updated,
+      updatedWeak,
+      'targeted_practice_completed',
+      `Completed 3-minute targeted remediation for ${currentChapter.title.en}`
+    );
+    setAssessmentResult(null);
+    setAssessmentAnswers({});
+    setChapterStep('assessment');
+  };
+
+  // Overall chapter mastery stats
+  const masteredCount = chapters.filter(
+    (c) =>
+      computeChapterStatus(c, chapterProgressMap, false) === 'mastered'
+  ).length;
+
+  const nextChapterObj = chapters.find(
+    (c) => c.chapterNumber === currentChapter.chapterNumber + 1
+  );
 
   const activeChallenge = CHART_CHALLENGES[activeChallengeIdx] || CHART_CHALLENGES[0];
-  const challengeCombinedCandles = [
-    ...activeChallenge.visibleCandles,
-    ...activeChallenge.hiddenCandles,
-  ];
-
-  const handleRevealChallenge = () => {
-    setCandlesRevealed(true);
-    onCompleteChallenge(activeChallenge.id);
-  };
-
-  const handleResetChallenge = (newIdx: number) => {
-    setActiveChallengeIdx(newIdx);
-    setTrendAns(null);
-    setActionAns(null);
-    setCandlesRevealed(false);
-  };
+  const activeScenario = BEHAVIORAL_SCENARIOS[scenarioIdx] || BEHAVIORAL_SCENARIOS[0];
 
   return (
     <div className="space-y-6">
-      {/* Top Sub-Navigation & Adaptive Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+      {/* TOP BAR: GUIDED CHAPTER MASTERY JOURNEY HEADER */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-800 pb-4">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold text-white">
+          <div className="flex items-center gap-2 text-xs font-mono text-[#6366F1] font-semibold uppercase tracking-wider">
+            <BookOpen className="w-4 h-4" />
+            <span>
+              CHAPTER-BASED MASTERY SYSTEM · LEARN → PRACTICE → ASSESS → MASTER → UNLOCK
+            </span>
+          </div>
+          <h1 className="text-xl md:text-2xl font-bold text-white mt-1">
             {lang === 'hinglish'
-              ? 'Structured Trading & Investment Academy'
-              : 'Structured Trading & Investment Academy'}
+              ? `Your Trading Journey (${masteredCount}/${chapters.length} Chapters Mastered)`
+              : `Your Trading Journey (${masteredCount}/${chapters.length} Chapters Mastered)`}
           </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            {lang === 'hinglish'
-              ? 'Concept → Simple Explanation → ₹ Example → Interactive Chart → Common Mistakes → Quiz → Practice'
-              : 'Progressive curriculum: Concept · Indian ₹ Example · Interactive Chart · Common Mistakes · Quiz · Practice'}
+          <p className="text-xs text-slate-400 mt-0.5">
+            {isAdminBypass
+              ? 'Admin Mode Active: All 18 chapters, practice labs, and assessments are unlocked for direct inspection.'
+              : 'Complete lessons and required deterministic practice, then score 80%+ on the Chapter Assessment to master and unlock the next chapter.'}
           </p>
         </div>
 
-        {/* Interactive Mode Switcher */}
-        <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg self-start">
-          <button
-            type="button"
-            onClick={() => setSubTab('courses')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap flex items-center gap-1.5 ${
-              subTab === 'courses'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Curriculum Paths</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab('challenge')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap flex items-center gap-1.5 ${
-              subTab === 'challenge'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <BarChart2 className="w-3.5 h-3.5" />
-            <span>Chart Challenge Mode</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSubTab('psychology')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors whitespace-nowrap flex items-center gap-1.5 ${
-              subTab === 'psychology'
-                ? 'bg-blue-600 text-white'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Brain className="w-3.5 h-3.5" />
-            <span>Psychology Scenarios</span>
-          </button>
+        <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-[#0B1325] border border-[#1E2D4A] rounded-2xl self-start shadow-md">
+          {(
+            [
+              { id: 'journey', label: '18-Chapter Mastery Path' },
+              { id: 'exercises_v2', label: '10-Format Exercise & Drawing Lab' },
+              { id: 'chart_challenge', label: 'Bar-by-Bar Chart Challenge' },
+              { id: 'psychology_lab', label: 'Psychology Scenarios' },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setSubTab(t.id)}
+              className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                subTab === t.id
+                  ? 'bg-gradient-to-r from-[#5B5FEF] to-[#6366F1] text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* SUBTAB 1: STRUCTURED CURRICULUM & 8-STEP LESSON VIEWER */}
-      {subTab === 'courses' && (
+      {/* WEAK SKILL QUEUE BANNER (Section 12) */}
+      {weakSkills.length > 0 && subTab === 'journey' && (
+        <div className="p-4 rounded-xl border border-[#F59E0B]/40 bg-[#F59E0B]/10 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-xs font-mono font-semibold text-[#F59E0B] uppercase flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" />
+              <span>NEEDS PRACTICE · WEAK SKILL REINFORCEMENT QUEUE</span>
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs text-slate-200 pt-1">
+              {weakSkills.map((ws) => (
+                <span
+                  key={ws.conceptId}
+                  className="px-2.5 py-1 rounded bg-slate-950 border border-[#F59E0B]/40 font-mono"
+                >
+                  ⚠ CH {String(ws.chapterNumber).padStart(2, '0')} ·{' '}
+                  {ws.title[lang]} ({ws.accuracyScore}%)
+                </span>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const firstWeak = weakSkills[0];
+              if (firstWeak) {
+                onSelectChapter(firstWeak.chapterId);
+                setChapterStep('remediation');
+              }
+            }}
+            className="px-4 py-2 rounded-lg bg-[#F59E0B] text-slate-950 text-xs font-bold shrink-0 cursor-pointer"
+          >
+            Start 3-Min Targeted Practice →
+          </button>
+        </div>
+      )}
+
+      {/* SUB-TAB 1: 18-CHAPTER MASTERY JOURNEY */}
+      {subTab === 'journey' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Course Paths & Modules */}
-          <div className="lg:col-span-4 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-slate-400">Filter by Skill Level</span>
-              <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg">
-                {(['all', 'beginner', 'intermediate', 'advanced'] as const).map((lvl) => (
+          {/* LEFT COLUMN (4 COLS): GUIDED CHAPTER PATH MAP (Section 14 & 15) */}
+          <div className="lg:col-span-4 space-y-5 max-h-[840px] overflow-y-auto pr-1">
+            {STAGE_CATEGORIES.map((stageName) => {
+              const stageChapters = chapters.filter(
+                (c) => c.stageCategory === stageName
+              );
+              return (
+                <div
+                  key={stageName}
+                  className="p-4 rounded-xl border border-slate-800 bg-slate-900 space-y-3"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <span className="text-xs font-mono uppercase tracking-wider text-[#6366F1] font-semibold">
+                      {stageName} Stage
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {stageChapters.length} Chapters
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {stageChapters.map((ch) => {
+                      const status = computeChapterStatus(
+                        ch,
+                        chapterProgressMap,
+                        isAdminBypass
+                      );
+                      const badge = getStatusBadgeMeta(status);
+                      const prog = chapterProgressMap[ch.id];
+                      const isSelected = ch.id === currentChapter.id;
+
+                      const lessonPct = prog?.lessonProgress ?? 0;
+                      const pracPct = prog?.practiceProgress ?? 0;
+                      const combinedPct =
+                        status === 'mastered'
+                          ? 100
+                          : Math.round((lessonPct + pracPct) / 2);
+
+                      const prereqLabels = ch.prerequisiteChapterIds
+                        .map((pid) => {
+                          const found = chapters.find((x) => x.id === pid);
+                          return found
+                            ? `CH ${String(found.chapterNumber).padStart(2, '0')}`
+                            : pid;
+                        })
+                        .join(', ');
+
+                      return (
+                        <div
+                          key={ch.id}
+                          onClick={() => handleSelectChapterCard(ch)}
+                          className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-2 ${
+                            isSelected
+                              ? 'border-[#6366F1] bg-slate-950 shadow-md'
+                              : status === 'locked'
+                              ? 'border-slate-800/70 bg-slate-950/50 opacity-80 hover:opacity-100'
+                              : 'border-slate-800 bg-slate-950 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                            <span className="text-[#6366F1] font-bold">
+                              {String(ch.chapterNumber).padStart(2, '0')} ·{' '}
+                              {ch.estimatedMinutes}m
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded border text-[10px] ${badge.badgeClass}`}
+                            >
+                              {lang === 'hinglish'
+                                ? badge.labelHi
+                                : badge.labelEn}
+                            </span>
+                          </div>
+
+                          <div className="text-sm font-semibold text-white">
+                            {ch.title[lang]}
+                          </div>
+                          <p className="text-xs text-slate-400 line-clamp-2">
+                            {ch.description[lang]}
+                          </p>
+
+                          {/* Progress bar */}
+                          <div className="space-y-1 pt-1">
+                            <div className="flex items-center justify-between text-[11px] font-mono">
+                              <span className="text-slate-400">
+                                {status === 'locked'
+                                  ? `Prereq: ${prereqLabels}`
+                                  : `${combinedPct}% complete`}
+                              </span>
+                              <span className="text-[#6366F1] font-semibold">
+                                {status === 'locked'
+                                  ? '[ Preview ]'
+                                  : isSelected
+                                  ? 'Active →'
+                                  : 'Open →'}
+                              </span>
+                            </div>
+                            <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{
+                                  width: `${combinedPct}%`,
+                                  backgroundColor:
+                                    status === 'mastered'
+                                      ? '#22C55E'
+                                      : '#6366F1',
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* RIGHT COLUMN (8 COLS): ACTIVE CHAPTER DETAIL & MASTERY LOOP (Sections 16–19) */}
+          <div className="lg:col-span-8 space-y-5">
+            {/* CHAPTER HEADER CARD */}
+            <div className="p-6 rounded-3xl border border-[#1E2D4A] bg-[#0B1325] shadow-xl space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-mono">
+                  <span className="px-2.5 py-1 rounded-lg bg-[#6366F1]/15 border border-[#6366F1]/40 text-[#6366F1] font-bold">
+                    CHAPTER {String(currentChapter.chapterNumber).padStart(2, '0')}
+                  </span>
+                  <span className="text-slate-400">
+                    {currentChapter.stageCategory} · {currentChapter.estimatedMinutes} min
+                  </span>
+                </div>
+
+                <span
+                  className={`px-2.5 py-1 rounded border text-xs font-mono ${
+                    getStatusBadgeMeta(currentStatus).badgeClass
+                  }`}
+                >
+                  {getStatusBadgeMeta(currentStatus).labelEn}
+                </span>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold text-white">
+                  {currentChapter.title[lang]}
+                </h2>
+                <p className="text-xs md:text-sm text-slate-300 mt-1">
+                  {currentChapter.description[lang]}
+                </p>
+              </div>
+
+              {/* LOCKED CHAPTER PREVIEW NOTICE (Section 13) */}
+              {isLocked && (
+                <div className="p-3.5 rounded-xl border border-[#F59E0B]/40 bg-[#F59E0B]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                  <div className="space-y-0.5">
+                    <div className="font-semibold text-[#F59E0B] flex items-center gap-1.5">
+                      <Lock className="w-4 h-4" />
+                      <span>
+                        🔒 Locked Chapter — Read-Only Preview Mode Active
+                      </span>
+                    </div>
+                    <p className="text-slate-300">
+                      To unlock Practice &amp; Mastery Assessment for this chapter, first master prerequisite(s):{' '}
+                      <strong className="font-mono text-white">
+                        {currentChapter.prerequisiteChapterIds.join(', ')}
+                      </strong>
+                      .
+                    </p>
+                  </div>
                   <button
-                    key={lvl}
                     type="button"
-                    onClick={() => setLevelFilter(lvl)}
-                    className={`px-2.5 py-1 rounded text-xs font-medium capitalize transition-colors ${
-                      levelFilter === lvl
-                        ? 'bg-slate-800 text-white'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
+                    onClick={() => {
+                      const firstPrereq =
+                        currentChapter.prerequisiteChapterIds[0] || 'ch-01';
+                      onSelectChapter(firstPrereq);
+                    }}
+                    className="px-3.5 py-2 rounded-lg bg-[#6366F1] text-white font-semibold shrink-0 cursor-pointer"
                   >
-                    {lvl}
+                    Go to Prerequisite →
                   </button>
-                ))}
+                </div>
+              )}
+
+              {/* 3-STEP CHAPTER LOOP STEPPER: 1. LEARN -> 2. PRACTICE -> 3. ASSESS */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setChapterStep('lessons')}
+                  className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                    chapterStep === 'lessons'
+                      ? 'border-[#6366F1] bg-[#6366F1]/15 text-white'
+                      : 'border-slate-800 bg-slate-950 text-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span>STEP 1 · LEARN</span>
+                    <span
+                      className={
+                        allLessonsCompleted
+                          ? 'text-[#22C55E]'
+                          : 'text-slate-400'
+                      }
+                    >
+                      {allLessonsCompleted
+                        ? '✓ 100%'
+                        : `${existingProgress.completedLessonIds.length}/${currentChapter.lessons.length}`}
+                    </span>
+                  </div>
+                  <div className="text-xs font-semibold mt-1">
+                    Interactive Lessons
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setChapterStep('practice')}
+                  className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
+                    chapterStep === 'practice'
+                      ? 'border-[#6366F1] bg-[#6366F1]/15 text-white'
+                      : 'border-slate-800 bg-slate-950 text-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span>STEP 2 · PRACTICE</span>
+                    <span
+                      className={
+                        allPracticeCompleted
+                          ? 'text-[#22C55E]'
+                          : 'text-slate-400'
+                      }
+                    >
+                      {allPracticeCompleted
+                        ? '✓ 100%'
+                        : `${existingProgress.completedPracticeIds.length}/${currentChapter.practiceActivities.length}`}
+                    </span>
+                  </div>
+                  <div className="text-xs font-semibold mt-1">
+                    Deterministic Practice
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!canTakeAssessment}
+                  onClick={() => setChapterStep('assessment')}
+                  className={`p-3 rounded-xl border text-left transition-colors ${
+                    !canTakeAssessment
+                      ? 'border-slate-800 bg-slate-950/50 text-slate-500 cursor-not-allowed'
+                      : chapterStep === 'assessment'
+                      ? 'border-[#6366F1] bg-[#6366F1]/15 text-white cursor-pointer'
+                      : 'border-slate-800 bg-slate-950 text-slate-300 cursor-pointer'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span>STEP 3 · ASSESS</span>
+                    <span>
+                      {!canTakeAssessment
+                        ? '🔒 Complete 1 & 2'
+                        : existingProgress.assessmentBestScore !== undefined
+                        ? `Best: ${existingProgress.assessmentBestScore}%`
+                        : `Min ${currentChapter.masteryThreshold}%`}
+                    </span>
+                  </div>
+                  <div className="text-xs font-semibold mt-1">
+                    Chapter Mastery Check
+                  </div>
+                </button>
               </div>
             </div>
 
-            <div className="space-y-3">
-              {filteredPaths.map((path) => (
-                <div
-                  key={path.id}
-                  className="border border-slate-800 bg-slate-900/60 rounded-xl p-4 space-y-3"
-                >
-                  <div>
-                    <div className="text-xs text-slate-400 font-mono">
-                      {path.code} · {path.level.toUpperCase()} · {path.modulesCount} Modules
-                    </div>
-                    <h3 className="text-sm font-semibold text-white mt-0.5">
-                      {path.title[lang]}
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                      {path.subtitle[lang]}
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
-                    {path.lessons.map((lesson) => {
-                      const isDone = profile.completedLessonIds.includes(lesson.id);
-                      const isActive = lesson.id === activeLesson.id;
+            {/* STEP 1 WORKSPACE: SHORT INTERACTIVE LESSONS (CONCEPT -> VISUAL -> QUICK CHECK) */}
+            {chapterStep === 'lessons' && activeLesson && (
+              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900 space-y-5">
+                {currentChapter.lessons.length > 1 && (
+                  <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
+                    {currentChapter.lessons.map((les, idx) => {
+                      const isDone =
+                        existingProgress.completedLessonIds.includes(les.id);
                       return (
                         <button
-                          key={lesson.id}
+                          key={les.id}
                           type="button"
-                          onClick={() => handleSelectLesson(lesson.id)}
-                          className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-colors flex items-center justify-between gap-2 ${
-                            isActive
-                              ? 'border-blue-500 bg-blue-950/35 text-white'
-                              : 'border-slate-800/80 bg-slate-950/60 text-slate-300 hover:border-slate-700'
+                          onClick={() => {
+                            setActiveLessonIndex(idx);
+                            setQuickCheckChoice(null);
+                            setQuickCheckChecked(false);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border cursor-pointer ${
+                            activeLessonIndex === idx
+                              ? 'border-[#6366F1] bg-[#6366F1] text-white'
+                              : 'border-slate-800 bg-slate-950 text-slate-300'
                           }`}
                         >
-                          <div className="min-w-0">
-                            <div className="font-medium truncate">
-                              M{lesson.moduleNumber}: {lesson.title[lang]}
-                            </div>
-                            <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                              {lesson.durationMinutes} min ·{' '}
-                              {isDone ? 'Completed ✓' : 'Interactive Lesson'}
-                            </div>
-                          </div>
-                          {isDone ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                          ) : (
-                            <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+                          {isDone ? '✓ ' : ''}Lesson {idx + 1}: {les.title[lang]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <div className="text-xs font-mono text-[#6366F1] uppercase">
+                    1. CORE CONCEPT · {activeLesson.durationMinutes} MIN READ
+                  </div>
+                  <h3 className="text-lg font-bold text-white">
+                    {activeLesson.title[lang]}
+                  </h3>
+                  <p className="text-sm text-slate-200 leading-relaxed">
+                    {activeLesson.conceptSummary[lang]}
+                  </p>
+                </div>
+
+                {/* Visual Example + Formula + Interactive Candlestick Anatomy Diagram */}
+                <div className="p-5 rounded-2xl border border-[#223254] bg-[#101C34] space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-mono text-[#14B8A6] font-semibold uppercase">
+                      2. VISUAL CONCEPT &amp; INDIAN MARKET (NSE/BSE ₹) EXAMPLE
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('tutor')}
+                      className="px-3 py-1 rounded-full bg-[#14B8A6]/15 border border-[#14B8A6]/40 text-[#14B8A6] text-[11px] font-bold flex items-center gap-1 hover:bg-[#14B8A6]/25 cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>✦ Ask AI Tutor</span>
+                    </button>
+                  </div>
+
+                  {/* Visual Candlestick & Risk/Reward Anatomy SVG Banner */}
+                  <div className="rounded-2xl bg-[#070D19] border border-[#1E2D4A] p-4">
+                    <svg
+                      viewBox="0 0 540 130"
+                      className="w-full h-28 md:h-32 overflow-visible"
+                      aria-label="Visual Candlestick & Risk Reward Diagram"
+                    >
+                      {/* Left: Bullish Candle Anatomy (#22C55E) */}
+                      <g transform="translate(20, 8)">
+                        <line x1="45" y1="8" x2="45" y2="104" stroke="#22C55E" strokeWidth="2.5" />
+                        <rect x="29" y="28" width="32" height="54" rx="5" fill="#22C55E" />
+                        <text x="88" y="14" fill="#94A3B8" fontSize="10" fontFamily="monospace">High (Upper Wick)</text>
+                        <text x="88" y="34" fill="#22C55E" fontSize="10" fontWeight="bold" fontFamily="monospace">▲ Close (Buyers Win)</text>
+                        <text x="88" y="80" fill="#CBD5E1" fontSize="10" fontFamily="monospace">Open Price</text>
+                        <text x="88" y="104" fill="#94A3B8" fontSize="10" fontFamily="monospace">Low (Support Test)</text>
+                        <text x="16" y="118" fill="#22C55E" fontSize="11" fontWeight="bold">Bullish Candle</text>
+                      </g>
+
+                      {/* Divider */}
+                      <line x1="255" y1="12" x2="255" y2="115" stroke="#1E2D4A" strokeDasharray="3 3" />
+
+                      {/* Right: Bearish Candle Anatomy (#EF4444) */}
+                      <g transform="translate(280, 8)">
+                        <line x1="45" y1="8" x2="45" y2="104" stroke="#EF4444" strokeWidth="2.5" />
+                        <rect x="29" y="28" width="32" height="54" rx="5" fill="#EF4444" />
+                        <text x="88" y="14" fill="#94A3B8" fontSize="10" fontFamily="monospace">High (Resistance)</text>
+                        <text x="88" y="34" fill="#CBD5E1" fontSize="10" fontFamily="monospace">Open Price</text>
+                        <text x="88" y="80" fill="#EF4444" fontSize="10" fontWeight="bold" fontFamily="monospace">▼ Close (Sellers Win)</text>
+                        <text x="88" y="104" fill="#94A3B8" fontSize="10" fontFamily="monospace">Low (Lower Wick)</text>
+                        <text x="16" y="118" fill="#EF4444" fontSize="11" fontWeight="bold">Bearish Candle</text>
+                      </g>
+                    </svg>
+                  </div>
+
+                  <p className="text-xs md:text-sm text-slate-200 leading-relaxed">
+                    {activeLesson.visualExample[lang]}
+                  </p>
+                  {activeLesson.formulaOrRule && (
+                    <div className="p-3 rounded-xl bg-[#070D19] border border-[#6366F1]/40 font-mono text-xs text-[#818CF8] font-semibold">
+                      Formula / Rule: {activeLesson.formulaOrRule}
+                    </div>
+                  )}
+                </div>
+
+                {/* Optional Embedded Candlestick Chart if Lesson has chartSymbol */}
+                {activeLesson.chartSymbol && (
+                  <div className="border border-slate-800 rounded-xl p-3 bg-slate-950">
+                    <InteractiveCandlestickChart
+                      symbol={activeLesson.chartSymbol}
+                      candles={
+                        (
+                          INDIAN_MARKET_ASSETS.find(
+                            (a) =>
+                              a.symbol === activeLesson.chartSymbol ||
+                              (activeLesson.chartSymbol === 'NIFTY50' &&
+                                a.symbol === 'NIFTY 50')
+                          ) || INDIAN_MARKET_ASSETS[0]
+                        ).candles
+                      }
+                      height={240}
+                    />
+                  </div>
+                )}
+
+                {/* Quick Check (Required to mark lesson complete) */}
+                <div className="p-4 rounded-xl border border-slate-800 bg-slate-950 space-y-3">
+                  <div className="text-xs font-mono uppercase text-[#6366F1] font-semibold">
+                    3. LESSON QUICK CHECK
+                  </div>
+                  <p className="text-sm font-semibold text-white">
+                    {activeLesson.quickCheck.question[lang]}
+                  </p>
+
+                  <div className="space-y-2">
+                    {activeLesson.quickCheck.options.map((opt, idx) => {
+                      const isSelected = quickCheckChoice === idx;
+                      const isRight =
+                        idx === activeLesson.quickCheck.correctIndex;
+                      let cls =
+                        'border-slate-800 bg-slate-900 text-slate-200 hover:border-slate-700';
+                      if (quickCheckChecked) {
+                        if (isRight) {
+                          cls =
+                            'border-[#22C55E] bg-[#22C55E]/10 text-[#22C55E]';
+                        } else if (isSelected) {
+                          cls =
+                            'border-[#EF4444] bg-[#EF4444]/10 text-[#EF4444]';
+                        }
+                      } else if (isSelected) {
+                        cls =
+                          'border-[#6366F1] bg-[#6366F1]/15 text-white';
+                      }
+
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => {
+                            setQuickCheckChoice(idx);
+                            setQuickCheckChecked(false);
+                          }}
+                          className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 cursor-pointer ${cls}`}
+                        >
+                          <span>{opt[lang]}</span>
+                          {quickCheckChecked && isRight && (
+                            <span className="font-mono font-bold">
+                              ✓ Correct
+                            </span>
+                          )}
+                          {quickCheckChecked && isSelected && !isRight && (
+                            <span className="font-mono font-bold">
+                              ✕ Incorrect
+                            </span>
                           )}
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
 
-          {/* Right Column: 8-Part Interactive Lesson Engine */}
-          <div className="lg:col-span-8 border border-slate-800 bg-slate-900/60 rounded-xl p-5 md:p-6 space-y-6">
-            {/* Lesson Header */}
-            <div className="border-b border-slate-800 pb-4 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="text-xs text-blue-400 font-mono">
-                  Module {activeLesson.moduleNumber} · {activeLesson.level.toUpperCase()} ·{' '}
-                  {activeLesson.durationMinutes} min read · Language:{' '}
-                  {lang === 'hinglish' ? 'Hinglish' : 'English'}
-                </div>
-                <h2 className="text-lg md:text-xl font-semibold text-white mt-1">
-                  {activeLesson.title[lang]}
-                </h2>
-              </div>
-              {profile.completedLessonIds.includes(activeLesson.id) && (
-                <span className="text-xs font-mono text-emerald-400">
-                  ● Completed
-                </span>
-              )}
-            </div>
-
-            {/* 1. Concept & 2. Simple Explanation */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1.5">
-                <div className="text-xs font-semibold text-blue-400">
-                  01. Core Concept
-                </div>
-                <p className="text-xs md:text-sm text-slate-200 leading-relaxed">
-                  {activeLesson.concept[lang]}
-                </p>
-              </div>
-              <div className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1.5">
-                <div className="text-xs font-semibold text-emerald-400">
-                  02. Simple Explanation ({lang === 'hinglish' ? 'Hinglish' : 'Plain English'})
-                </div>
-                <p className="text-xs md:text-sm text-slate-200 leading-relaxed">
-                  {activeLesson.simpleExplanation[lang]}
-                </p>
-              </div>
-            </div>
-
-            {/* 3. Realistic Indian Market Example */}
-            <div className="p-4 rounded-lg bg-blue-950/20 border border-blue-500/30 space-y-1.5">
-              <div className="text-xs font-semibold text-blue-300">
-                03. Realistic Indian Market (₹ INR) Example
-              </div>
-              <p className="text-xs md:text-sm text-slate-200 leading-relaxed font-mono">
-                {activeLesson.realisticExample[lang]}
-              </p>
-            </div>
-
-            {/* 4. Interactive Visual Chart Example */}
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-semibold text-slate-200">
-                  04. Interactive Visual Chart · {lessonAsset.symbol} ({lessonAsset.exchange})
-                </div>
-                <div className="text-xs text-slate-400">
-                  {activeLesson.visualChartAnnotation[lang]}
-                </div>
-              </div>
-              <InteractiveCandlestickChart
-                symbol={lessonAsset.symbol}
-                candles={lessonAsset.candles}
-                supportLevel={lessonAsset.supportLevel}
-                resistanceLevel={lessonAsset.resistanceLevel}
-                showEma20={true}
-                height={270}
-              />
-            </div>
-
-            {/* 5. Common Mistakes */}
-            <div className="p-4 rounded-lg bg-rose-950/15 border border-rose-500/30 space-y-2">
-              <div className="text-xs font-semibold text-rose-300 flex items-center gap-1.5">
-                <ShieldAlert className="w-4 h-4" />
-                <span>05. Common Mistakes Beginners & Traders Make</span>
-              </div>
-              <ul className="space-y-1.5 text-xs text-slate-300 list-disc list-inside">
-                {activeLesson.commonMistakes.map((m, i) => (
-                  <li key={i} className="leading-relaxed">
-                    {m[lang]}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* 6. Interactive Mini Quiz */}
-            {activeLesson.quiz.length > 0 && (
-              <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-3">
-                <div className="text-xs font-semibold text-amber-400">
-                  06. Knowledge Check Mini-Quiz
-                </div>
-                <p className="text-sm font-medium text-white">
-                  {activeLesson.quiz[0].question[lang]}
-                </p>
-                <div className="space-y-2">
-                  {activeLesson.quiz[0].options.map((opt, idx) => {
-                    const isSelected = selectedQuizOption === idx;
-                    const isRight = idx === activeLesson.quiz[0].correctIndex;
-                    let borderStyle = 'border-slate-800 bg-slate-900/70 text-slate-200';
-                    if (quizSubmitted) {
-                      if (isRight) {
-                        borderStyle = 'border-emerald-500 bg-emerald-950/30 text-emerald-200';
-                      } else if (isSelected && !isRight) {
-                        borderStyle = 'border-rose-500 bg-rose-950/30 text-rose-200';
-                      }
-                    } else if (isSelected) {
-                      borderStyle = 'border-blue-500 bg-blue-950/30 text-blue-200';
-                    }
-
-                    return (
+                  {!isLocked && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                       <button
-                        key={idx}
+                        type="button"
+                        disabled={quickCheckChoice === null}
+                        onClick={handleCompleteCurrentLesson}
+                        className="px-5 py-2.5 rounded-full bg-gradient-to-r from-[#5B5FEF] to-[#6366F1] hover:from-[#4F46E5] hover:to-[#5B5FEF] disabled:opacity-40 text-white text-xs font-bold shadow-md shadow-[#6366F1]/20 cursor-pointer"
+                      >
+                        Verify Quick Check &amp; Mark Lesson Complete
+                      </button>
+
+                      {allLessonsCompleted && (
+                        <button
+                          type="button"
+                          onClick={() => setChapterStep('practice')}
+                          className="px-5 py-2.5 rounded-full bg-[#22C55E] text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span>Proceed to Step 2: Practice</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {quickCheckChecked && (
+                    <div className="p-3 rounded-lg bg-[#14B8A6]/10 border border-[#14B8A6]/40 text-xs text-slate-200">
+                      <strong className="text-[#14B8A6] block mb-0.5">
+                        ✦ Concept Explanation:
+                      </strong>
+                      {activeLesson.quickCheck.explanation[lang]}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2 WORKSPACE: REQUIRED DETERMINISTIC PRACTICE ACTIVITIES */}
+            {chapterStep === 'practice' && (
+              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900 space-y-5">
+                <div className="border-b border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-mono text-[#6366F1] uppercase font-semibold">
+                      STEP 2 · DETERMINISTIC CHAPTER PRACTICE
+                    </div>
+                    <h3 className="text-base font-bold text-white mt-0.5">
+                      Apply {currentChapter.title[lang]} Before Assessment Unlocks
+                    </h3>
+                  </div>
+                  {canTakeAssessment && (
+                    <button
+                      type="button"
+                      onClick={() => setChapterStep('assessment')}
+                      className="px-4 py-2 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span>Proceed to Step 3: Chapter Assessment</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {currentChapter.practiceActivities.map((act) => {
+                  const isDone =
+                    existingProgress.completedPracticeIds.includes(act.id);
+                  const fb = practiceFeedback[act.id];
+
+                  return (
+                    <div
+                      key={act.id}
+                      className="p-4 rounded-xl border border-slate-800 bg-slate-950 space-y-3"
+                    >
+                      <div className="flex items-center justify-between text-xs font-mono">
+                        <span className="text-white font-semibold">
+                          {act.title[lang]}
+                        </span>
+                        <span
+                          className={
+                            isDone ? 'text-[#22C55E]' : 'text-[#F59E0B]'
+                          }
+                        >
+                          {isDone ? '✓ Completed' : 'Required Practice'}
+                        </span>
+                      </div>
+
+                      <p className="text-xs md:text-sm text-slate-200 leading-relaxed">
+                        {act.prompt[lang]}
+                      </p>
+
+                      {act.type === 'numeric_calc' ? (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <input
+                            type="number"
+                            step="any"
+                            disabled={isLocked}
+                            placeholder={`Enter value (${act.numericUnit || ''})`}
+                            value={practiceNumericInputs[act.id] || ''}
+                            onChange={(e) =>
+                              setPracticeNumericInputs((prev) => ({
+                                ...prev,
+                                [act.id]: e.target.value,
+                              }))
+                            }
+                            className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white font-mono w-48"
+                          />
+                          <button
+                            type="button"
+                            disabled={isLocked}
+                            onClick={() => handleVerifyPracticeActivity(act.id)}
+                            className="px-4 py-2 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Verify Calculation
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {(act.options || []).map((opt, oIdx) => (
+                            <button
+                              key={oIdx}
+                              type="button"
+                              disabled={isLocked}
+                              onClick={() =>
+                                setPracticeOptionChoices((prev) => ({
+                                  ...prev,
+                                  [act.id]: oIdx,
+                                }))
+                              }
+                              className={`w-full text-left px-3.5 py-2 rounded-lg border text-xs cursor-pointer ${
+                                practiceOptionChoices[act.id] === oIdx
+                                  ? 'border-[#6366F1] bg-[#6366F1]/15 text-white'
+                                  : 'border-slate-800 bg-slate-900 text-slate-300'
+                              }`}
+                            >
+                              {opt[lang]}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            disabled={isLocked}
+                            onClick={() => handleVerifyPracticeActivity(act.id)}
+                            className="px-4 py-2 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
+                          >
+                            Verify Decision
+                          </button>
+                        </div>
+                      )}
+
+                      {fb && (
+                        <div
+                          className={`p-3 rounded-lg border text-xs ${
+                            fb.passed
+                              ? 'border-[#22C55E]/40 bg-[#22C55E]/10 text-[#22C55E]'
+                              : 'border-[#F59E0B]/40 bg-[#F59E0B]/10 text-[#F59E0B]'
+                          }`}
+                        >
+                          {fb.message}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* STEP 3 WORKSPACE: CHAPTER MASTERY ASSESSMENT & CELEBRATION / REMEDIATION (Sections 9, 10 & 11) */}
+            {chapterStep === 'assessment' && (
+              <div className="p-5 rounded-xl border border-slate-800 bg-slate-900 space-y-5">
+                <div className="border-b border-slate-800 pb-3">
+                  <div className="text-xs font-mono text-[#6366F1] uppercase font-semibold">
+                    STEP 3 · CHAPTER MASTERY ASSESSMENT (MIN{' '}
+                    {currentChapter.masteryThreshold}% + ALL CRITICAL CONCEPTS)
+                  </div>
+                  <h3 className="text-base font-bold text-white mt-0.5">
+                    {currentChapter.title[lang]} — Mastery Verification
+                  </h3>
+                </div>
+
+                {/* MASTERY CELEBRATION CARD (Section 10) */}
+                {assessmentResult && assessmentResult.mastered && (
+                  <div className="p-6 rounded-xl border border-[#22C55E] bg-slate-950 text-center space-y-3">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#22C55E]/15 text-[#22C55E] text-xs font-mono font-bold">
+                      <Award className="w-4 h-4" />
+                      <span>🎉 MASTERED</span>
+                    </div>
+                    <h4 className="text-xl font-bold text-white">
+                      {currentChapter.title[lang]}
+                    </h4>
+                    <div className="flex justify-center gap-6 text-xs font-mono text-slate-300">
+                      <span>Score: {assessmentResult.scorePct}%</span>
+                      <span>
+                        Critical Concepts: {currentChapter.concepts.length}/
+                        {currentChapter.concepts.length} Passed
+                      </span>
+                    </div>
+                    {nextChapterObj && (
+                      <div className="text-xs font-mono text-[#22C55E]">
+                        ✓ Chapter {String(nextChapterObj.chapterNumber).padStart(2, '0')} ({nextChapterObj.title[lang]}) Unlocked!
+                      </div>
+                    )}
+                    {nextChapterObj && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectChapterCard(nextChapterObj)}
+                          className="px-5 py-2.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
+                        >
+                          Continue to Chapter{' '}
+                          {String(nextChapterObj.chapterNumber).padStart(2, '0')} →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TARGETED REMEDIATION CARD IF FAILED (Section 11) */}
+                {assessmentResult && !assessmentResult.mastered && (
+                  <div className="p-5 rounded-xl border border-[#F59E0B] bg-slate-950 space-y-3">
+                    <div className="text-xs font-mono font-bold text-[#F59E0B] uppercase">
+                      ⚠ ASSESSMENT COMPLETE · SCORE: {assessmentResult.scorePct}% (REQUIRED: {currentChapter.masteryThreshold}%)
+                    </div>
+                    <p className="text-xs text-slate-300">
+                      Needs targeted practice before unlocking the next chapter:
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {currentChapter.concepts
+                        .filter((c) =>
+                          assessmentResult.weakConceptIds.includes(c.id)
+                        )
+                        .map((c) => (
+                          <span
+                            key={c.id}
+                            className="px-2.5 py-1 rounded bg-[#F59E0B]/15 border border-[#F59E0B]/40 text-xs font-mono text-[#F59E0B]"
+                          >
+                            ⚠ {c.title[lang]}
+                          </span>
+                        ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setChapterStep('remediation')}
+                        className="px-4 py-2 rounded-lg bg-[#F59E0B] text-slate-950 text-xs font-bold cursor-pointer"
+                      >
+                        Launch 3-Minute Targeted Practice →
+                      </button>
+                      <button
                         type="button"
                         onClick={() => {
-                          if (!quizSubmitted) setSelectedQuizOption(idx);
+                          setAssessmentResult(null);
+                          setAssessmentAnswers({});
                         }}
-                        className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-xs transition-colors ${borderStyle}`}
+                        className="px-3.5 py-2 rounded-lg border border-slate-700 bg-slate-900 text-xs text-slate-200 cursor-pointer"
                       >
-                        {opt[lang]}
+                        Retry Assessment
                       </button>
-                    );
-                  })}
+                    </div>
+                  </div>
+                )}
+
+                {/* ASSESSMENT QUESTIONS LIST */}
+                <div className="space-y-4">
+                  {currentChapter.assessmentQuestions.map((q, qIdx) => (
+                    <div
+                      key={q.id}
+                      className="p-4 rounded-xl border border-slate-800 bg-slate-950 space-y-3"
+                    >
+                      <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                        <span>
+                          Question {qIdx + 1} · {q.questionType.toUpperCase()}
+                        </span>
+                        {q.isCriticalConcept && (
+                          <span className="text-[#F59E0B]">
+                            ★ Critical Mastery Concept
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm font-semibold text-white">
+                        {q.prompt[lang]}
+                      </p>
+
+                      <div className="space-y-2">
+                        {q.options.map((opt, oIdx) => {
+                          const isPicked = assessmentAnswers[q.id] === oIdx;
+                          const isCorrect = oIdx === q.correctIndex;
+                          let cls =
+                            'border-slate-800 bg-slate-900 text-slate-200 hover:border-slate-700';
+                          if (assessmentResult) {
+                            if (isCorrect) {
+                              cls =
+                                'border-[#22C55E] bg-[#22C55E]/10 text-[#22C55E]';
+                            } else if (isPicked) {
+                              cls =
+                                'border-[#EF4444] bg-[#EF4444]/10 text-[#EF4444]';
+                            }
+                          } else if (isPicked) {
+                            cls =
+                              'border-[#6366F1] bg-[#6366F1]/15 text-white';
+                          }
+
+                          return (
+                            <button
+                              key={oIdx}
+                              type="button"
+                              disabled={Boolean(assessmentResult)}
+                              onClick={() =>
+                                setAssessmentAnswers((prev) => ({
+                                  ...prev,
+                                  [q.id]: oIdx,
+                                }))
+                              }
+                              className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 cursor-pointer ${cls}`}
+                            >
+                              <span>{opt[lang]}</span>
+                              {assessmentResult && isCorrect && (
+                                <span className="font-mono font-bold">
+                                  ✓ Correct
+                                </span>
+                              )}
+                              {assessmentResult && isPicked && !isCorrect && (
+                                <span className="font-mono font-bold">
+                                  ✕ Incorrect
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {assessmentResult && (
+                        <div className="p-3 rounded-lg bg-[#14B8A6]/10 border border-[#14B8A6]/40 text-xs text-slate-200 space-y-1">
+                          {q.deterministicFormulaNote && (
+                            <div className="font-mono text-[#14B8A6]">
+                              Deterministic Proof: {q.deterministicFormulaNote}
+                            </div>
+                          )}
+                          <p>{q.explanation[lang]}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
 
-                {!quizSubmitted ? (
+                {!assessmentResult && (
                   <button
                     type="button"
-                    disabled={selectedQuizOption === null}
-                    onClick={handleQuizSubmit}
-                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium transition-colors"
+                    disabled={
+                      Object.keys(assessmentAnswers).length <
+                      currentChapter.assessmentQuestions.length
+                    }
+                    onClick={handleSubmitChapterAssessment}
+                    className="w-full py-3 rounded-xl bg-[#6366F1] hover:bg-[#4F46E5] disabled:opacity-40 text-white text-xs font-bold cursor-pointer"
                   >
-                    {lang === 'hinglish'
-                      ? 'Answer Check Karein & Lesson Complete Karein'
-                      : 'Submit Answer & Complete Lesson'}
+                    Submit Chapter Assessment &amp; Check Mastery
                   </button>
-                ) : (
-                  <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 space-y-1">
-                    <div className="font-semibold text-emerald-400">
-                      {selectedQuizOption === activeLesson.quiz[0].correctIndex
-                        ? '✓ Correct — Skill Score Updated!'
-                        : 'Explanation & Learning Note:'}
-                    </div>
-                    <p>{activeLesson.quiz[0].explanation[lang]}</p>
-                  </div>
                 )}
               </div>
             )}
 
-            {/* 7. Practical Exercise & 8. Key Takeaway */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-800">
-              <div className="p-4 rounded-lg bg-slate-950/70 border border-slate-800 space-y-2">
-                <div className="text-xs font-semibold text-slate-200">
-                  07. Practical Hands-On Exercise
+            {/* TARGETED REMEDIATION DRILL WORKSPACE (Section 11) */}
+            {chapterStep === 'remediation' && (
+              <div className="p-5 rounded-xl border border-[#F59E0B]/50 bg-slate-900 space-y-4">
+                <div className="text-xs font-mono text-[#F59E0B] uppercase font-semibold">
+                  ⚠ 3-MINUTE TARGETED REMEDIATION DRILL
                 </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {activeLesson.practicalExercise[lang]}
-                </p>
+                <h3 className="text-lg font-bold text-white">
+                  Reinforce Weak Concepts in {currentChapter.title[lang]}
+                </h3>
+                <div className="space-y-3">
+                  {currentChapter.lessons.map((l) => (
+                    <div
+                      key={l.id}
+                      className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs"
+                    >
+                      <div className="font-semibold text-white">
+                        {l.title[lang]}
+                      </div>
+                      <p className="text-slate-300">{l.conceptSummary[lang]}</p>
+                      {l.formulaOrRule && (
+                        <div className="font-mono text-[#14B8A6] pt-1">
+                          Key Rule: {l.formulaOrRule}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
                 <button
                   type="button"
-                  onClick={() => onNavigate('practice')}
-                  className="text-xs font-medium text-blue-400 hover:text-blue-300 flex items-center gap-1 pt-1"
+                  onClick={handleCompleteTargetedRemediation}
+                  className="px-5 py-2.5 rounded-lg bg-[#22C55E] text-slate-950 text-xs font-bold cursor-pointer"
                 >
-                  <span>Open Practice Lab</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
+                  ✓ Complete Targeted Review &amp; Retry Chapter Assessment
                 </button>
               </div>
-
-              <div className="p-4 rounded-lg bg-emerald-950/15 border border-emerald-500/30 space-y-2">
-                <div className="text-xs font-semibold text-emerald-400">
-                  08. Key Process Takeaway
-                </div>
-                <p className="text-xs text-slate-200 leading-relaxed font-medium">
-                  "{activeLesson.keyTakeaway[lang]}"
-                </p>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* SUBTAB 2: INTERACTIVE CHART CHALLENGE MODE (BAR-BY-BAR REVEAL) */}
-      {subTab === 'challenge' && (
-        <div className="border border-slate-800 bg-slate-900/60 rounded-xl p-5 md:p-6 space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-            <div>
-              <div className="text-xs text-blue-400 font-mono">
-                Interactive Historical Simulation · Purpose: Process Education, Not Prediction
-              </div>
-              <h2 className="text-lg font-semibold text-white mt-0.5">
-                {activeChallenge.title[lang]}
-              </h2>
-            </div>
+      {/* SUB-TAB 2: 10-FORMAT INTERACTIVE EXERCISE SUITE & CHART DRAWING STUDIO */}
+      {subTab === 'exercises_v2' && (
+        <InteractiveExerciseSuite
+          language={lang}
+          onScoreUpdate={(correct: boolean) =>
+            onCompleteLessonLegacy('ex-v2-suite', correct)
+          }
+          onReportIssue={onReportIssue || (() => {})}
+        />
+      )}
 
-            <div className="flex items-center gap-2">
-              {CHART_CHALLENGES.map((ch, idx) => (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => handleResetChallenge(idx)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                    activeChallengeIdx === idx
-                      ? 'border-blue-500 bg-blue-950/40 text-blue-300'
-                      : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Challenge #{idx + 1} ({ch.symbol})
-                </button>
-              ))}
+      {/* SUB-TAB 3: BAR-BY-BAR HISTORICAL CHART CHALLENGE */}
+      {subTab === 'chart_challenge' && activeChallenge && (
+        <div className="border border-slate-800 bg-slate-900 rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold text-white">
+                {activeChallenge.title[lang]} ({activeChallenge.symbol} ·{' '}
+                {activeChallenge.timeframe})
+              </h2>
+              <p className="text-xs text-slate-400">
+                {activeChallenge.setupContext[lang]}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setRevealedBars((p) => !p)}
+                className="px-3.5 py-1.5 rounded-lg bg-[#6366F1] text-white text-xs font-semibold cursor-pointer"
+              >
+                {revealedBars ? 'Hide Future Bars' : 'Reveal Next Outcome Bars'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRevealedBars(false);
+                  setActiveChallengeIdx(
+                    (prev) => (prev + 1) % CHART_CHALLENGES.length
+                  );
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-xs text-slate-200 cursor-pointer"
+              >
+                Next Chart →
+              </button>
             </div>
           </div>
 
-          <p className="text-xs md:text-sm text-slate-300 leading-relaxed">
-            {activeChallenge.setupContext[lang]}
-          </p>
-
-          {/* Chart with Hidden or Revealed Future Candles */}
           <InteractiveCandlestickChart
-            symbol={`${activeChallenge.symbol} (${
-              candlesRevealed ? 'All 46 Candles Revealed' : 'First 34 Candles Shown · Next 12 Hidden'
-            })`}
-            candles={challengeCombinedCandles}
-            revealedCount={
-              candlesRevealed
-                ? challengeCombinedCandles.length
-                : activeChallenge.visibleCandles.length
+            symbol={activeChallenge.symbol}
+            candles={
+              revealedBars
+                ? [
+                    ...activeChallenge.visibleCandles,
+                    ...activeChallenge.hiddenCandles,
+                  ]
+                : activeChallenge.visibleCandles
             }
             supportLevel={activeChallenge.supportZone}
             resistanceLevel={activeChallenge.resistanceZone}
             entryLevel={activeChallenge.suggestedEntry}
             stopLevel={activeChallenge.suggestedStop}
             targetLevel={activeChallenge.suggestedTarget}
-            height={310}
+            height={300}
           />
 
-          {/* Setup Reference Bar */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 p-3.5 rounded-lg bg-slate-950 border border-slate-800 font-mono text-xs tabular-nums">
-            <div>
-              <span className="text-slate-400 block">Support Zone</span>
-              <strong className="text-emerald-400">₹{activeChallenge.supportZone}</strong>
+          {revealedBars && (
+            <div className="p-3.5 rounded-lg bg-[#14B8A6]/10 border border-[#14B8A6]/40 text-xs text-slate-200">
+              <strong className="text-[#14B8A6] block mb-0.5">
+                ✦ Outcome Breakdown:
+              </strong>
+              {activeChallenge.outcomeExplanation[lang]}
             </div>
-            <div>
-              <span className="text-slate-400 block">Resistance Zone</span>
-              <strong className="text-rose-400">₹{activeChallenge.resistanceZone}</strong>
-            </div>
-            <div>
-              <span className="text-slate-400 block">Hypothetical Entry</span>
-              <strong className="text-sky-400">₹{activeChallenge.suggestedEntry}</strong>
-            </div>
-            <div>
-              <span className="text-slate-400 block">Invalidation Stop</span>
-              <strong className="text-rose-400">₹{activeChallenge.suggestedStop}</strong>
-            </div>
-            <div>
-              <span className="text-slate-400 block">Target Level</span>
-              <strong className="text-emerald-400">₹{activeChallenge.suggestedTarget}</strong>
-            </div>
-          </div>
-
-          {/* 2 Diagnostic Questions before Reveal */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-2.5">
-              <div className="text-xs font-semibold text-white">
-                {activeChallenge.questions.trendQuestion.prompt[lang]}
-              </div>
-              {activeChallenge.questions.trendQuestion.options.map((opt, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setTrendAns(idx)}
-                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
-                    trendAns === idx
-                      ? 'border-blue-500 bg-blue-950/30 text-blue-200'
-                      : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-slate-700'
-                  }`}
-                >
-                  {opt[lang]}
-                </button>
-              ))}
-            </div>
-
-            <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 space-y-2.5">
-              <div className="text-xs font-semibold text-white">
-                {activeChallenge.questions.actionQuestion.prompt[lang]}
-              </div>
-              {activeChallenge.questions.actionQuestion.options.map((opt, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => setActionAns(idx)}
-                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
-                    actionAns === idx
-                      ? 'border-blue-500 bg-blue-950/30 text-blue-200'
-                      : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-slate-700'
-                  }`}
-                >
-                  {opt[lang]}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Reveal Action & Outcome Explanation */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-800">
-            {!candlesRevealed ? (
-              <button
-                type="button"
-                onClick={handleRevealChallenge}
-                className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium flex items-center gap-2 transition-colors"
-              >
-                <Eye className="w-4 h-4" />
-                <span>
-                  {lang === 'hinglish'
-                    ? 'Agle 12 Historical Candles Reveal Karein & Explanation Dekhein'
-                    : 'Reveal Subsequent 12 Historical Candles & Process Debrief'}
-                </span>
-              </button>
-            ) : (
-              <div className="w-full p-4 rounded-lg bg-emerald-950/20 border border-emerald-500/30 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-emerald-400">
-                    Historical Outcome & Risk Process Debrief
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setCandlesRevealed(false)}
-                    className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Hide Future Candles Again</span>
-                  </button>
-                </div>
-                <p className="text-xs md:text-sm text-slate-200 leading-relaxed">
-                  {activeChallenge.outcomeExplanation[lang]}
-                </p>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       )}
 
-      {/* SUBTAB 3: TRADING PSYCHOLOGY BEHAVIORAL SCENARIOS */}
-      {subTab === 'psychology' && (
-        <div className="space-y-4">
-          <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60">
-            <h2 className="text-base font-semibold text-white">
-              {lang === 'hinglish'
-                ? 'Trading Psychology & Behavioral Decision Checklists'
-                : 'Trading Psychology & Behavioral Decision Lab'}
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              {lang === 'hinglish'
-                ? 'Real trading mein 80% galtiyan FOMO, Revenge Trading aur Loss Aversion se hoti hain. Niche diye gaye scenarios mein apna decision test karein.'
-                : 'Evaluate how you respond to losing streaks, stop-loss pressure, and FOMO using rules-based thinking.'}
-            </p>
+      {/* SUB-TAB 4: TRADING PSYCHOLOGY SCENARIO LAB */}
+      {subTab === 'psychology_lab' && activeScenario && (
+        <div className="border border-slate-800 bg-slate-900 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-mono text-[#F59E0B]">
+                Bias Tested: {activeScenario.biasTested}
+              </span>
+              <h2 className="text-base font-bold text-white">
+                {activeScenario.title[lang]}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setScenarioPick(null);
+                setScenarioIdx(
+                  (prev) => (prev + 1) % BEHAVIORAL_SCENARIOS.length
+                );
+              }}
+              className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-950 text-xs text-slate-200 cursor-pointer"
+            >
+              Next Scenario →
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {BEHAVIORAL_SCENARIOS.map((sc) => {
-              const chosenIdx = scenarioAnswers[sc.id];
-              return (
-                <div
-                  key={sc.id}
-                  className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 space-y-4 flex flex-col justify-between"
-                >
-                  <div className="space-y-3">
-                    <div className="text-xs font-mono text-amber-400">
-                      Bias Tested: {sc.biasTested}
-                    </div>
-                    <h3 className="text-base font-semibold text-white">{sc.title[lang]}</h3>
-                    <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3.5 rounded-lg border border-slate-800">
-                      {sc.situation[lang]}
-                    </p>
+          <p className="text-xs md:text-sm text-slate-200">
+            {activeScenario.situation[lang]}
+          </p>
 
-                    <div className="space-y-2 pt-1">
-                      {sc.options.map((opt, idx) => {
-                        const isChosen = chosenIdx === idx;
-                        return (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() =>
-                              setScenarioAnswers((prev) => ({ ...prev, [sc.id]: idx }))
-                            }
-                            className={`w-full text-left p-3 rounded-lg border text-xs transition-colors ${
-                              isChosen
-                                ? opt.isProcessDisciplined
-                                  ? 'border-emerald-500 bg-emerald-950/30 text-emerald-200'
-                                  : 'border-rose-500 bg-rose-950/30 text-rose-200'
-                                : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700'
-                            }`}
-                          >
-                            {opt.label[lang]}
-                          </button>
-                        );
-                      })}
-                    </div>
+          <div className="space-y-2">
+            {activeScenario.options.map((opt, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setScenarioPick(idx)}
+                className={`w-full text-left p-3.5 rounded-xl border text-xs cursor-pointer ${
+                  scenarioPick === idx
+                    ? opt.isProcessDisciplined
+                      ? 'border-[#22C55E] bg-[#22C55E]/10 text-[#22C55E]'
+                      : 'border-[#EF4444] bg-[#EF4444]/10 text-[#EF4444]'
+                    : 'border-slate-800 bg-slate-950 text-slate-200'
+                }`}
+              >
+                <div className="font-semibold">{opt.label[lang]}</div>
+                {scenarioPick === idx && (
+                  <div className="mt-1.5 text-slate-300">
+                    {opt.isProcessDisciplined ? '✓ ' : '✕ '}
+                    {opt.feedback[lang]}
                   </div>
-
-                  {chosenIdx !== undefined && (
-                    <div
-                      className={`p-3.5 rounded-lg border text-xs leading-relaxed ${
-                        sc.options[chosenIdx].isProcessDisciplined
-                          ? 'border-emerald-500/40 bg-emerald-950/20 text-emerald-200'
-                          : 'border-rose-500/40 bg-rose-950/20 text-rose-200'
-                      }`}
-                    >
-                      {sc.options[chosenIdx].feedback[lang]}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                )}
+              </button>
+            ))}
           </div>
         </div>
       )}
