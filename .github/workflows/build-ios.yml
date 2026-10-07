@@ -8,6 +8,7 @@ on:
       - 'ios/**'
       - 'capacitor.config.ts'
       - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/build-ios.yml'
   workflow_dispatch:
     inputs:
@@ -36,7 +37,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build Web Application
         run: npm run build
@@ -48,38 +49,48 @@ jobs:
 
       - name: Setup Xcode Environment
         run: |
+          if [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          elif [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          fi
           xcodebuild -version
-          xcrun simctl list devicetypes | head -n 10
 
       # Build for iOS Simulator (Unsigned / Direct Testable)
       - name: Build iOS Simulator App
-        if: ${{ inputs.target == 'simulator' || github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || inputs.target == 'simulator' }}
         working-directory: ios/App
         run: |
           xcodebuild \
             -project App.xcodeproj \
             -scheme App \
             -configuration Debug \
-            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             clean build
 
       # Package Simulator App into ZIP
       - name: Package Simulator App
-        if: ${{ inputs.target == 'simulator' || github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || inputs.target == 'simulator' }}
         working-directory: ios/App
         run: |
           mkdir -p output
           APP_DIR=$(find build/DerivedData -name "App.app" -type d | head -n 1)
-          if [ -d "$APP_DIR" ]; then
+          if [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
             cd "$(dirname "$APP_DIR")"
             zip -r "$GITHUB_WORKSPACE/ios/App/output/TradeLearn-iOS-Simulator.zip" App.app
+          else
+            echo "::warning::App.app not found in DerivedData"
           fi
 
-      # Build Generic Archive (For App Store / TestFlight / Ad-Hoc if signing keys provided)
+      # Build Generic Archive (For App Store / TestFlight if signing configured)
       - name: Build iOS Xcode Archive
         if: ${{ inputs.target == 'archive' }}
         working-directory: ios/App
@@ -92,6 +103,8 @@ jobs:
             -archivePath build/App.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             archive
 
       - name: Package Xcode Archive
@@ -105,11 +118,12 @@ jobs:
           fi
 
       - name: Upload iOS Simulator App Artifact
-        if: ${{ inputs.target == 'simulator' || github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || inputs.target == 'simulator' }}
         uses: actions/upload-artifact@v4
         with:
           name: TradeLearn-iOS-Simulator-App
           path: ios/App/output/*.zip
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Upload iOS Archive Artifact
@@ -118,4 +132,5 @@ jobs:
         with:
           name: TradeLearn-iOS-Xcode-Archive
           path: ios/App/output/*.xcarchive.zip
+          if-no-files-found: warn
           retention-days: 30

@@ -58,7 +58,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Node Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build Web Application
         run: npm run build
@@ -68,12 +68,18 @@ jobs:
       - name: Sync Capacitor Android
         run: npx cap sync android
 
-      - name: Setup Java JDK 17
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Grant Execute Permission to Gradle Wrapper
         run: chmod +x android/gradlew
@@ -91,18 +97,6 @@ jobs:
         run: |
           ./gradlew assembleRelease --stacktrace
           ./gradlew bundleRelease --stacktrace
-
-      # Optional Sign Release APK if signing secrets are configured
-      - name: Sign Release APK
-        if: ${{ inputs.build_type == 'release' && env.KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > android/release-keystore.jks
-          # Sign APK using jarsigner or apksigner if available
 
       # Upload Debug APK Artifact
       - name: Upload Android Debug APK
@@ -146,7 +140,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Node Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build Web Application
         run: npm run build
@@ -158,22 +152,30 @@ jobs:
 
       - name: Select Xcode Version
         run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          if [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          elif [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          fi
           xcodebuild -version
 
-      # Build iOS for Generic Device / Simulator
-      - name: Build iOS Application (Simulator / Unsigned Archive)
+      # Build iOS for Generic Simulator
+      - name: Build iOS Application (Simulator / Unsigned)
         working-directory: ios/App
         run: |
           xcodebuild \
             -project App.xcodeproj \
             -scheme App \
             -configuration Debug \
-            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             clean build
 
       - name: Create iOS App Zip
@@ -181,11 +183,11 @@ jobs:
         run: |
           mkdir -p output
           APP_PATH=$(find build/DerivedData -name "App.app" -type d | head -n 1)
-          if [ -d "$APP_PATH" ]; then
+          if [ -n "$APP_PATH" ] && [ -d "$APP_PATH" ]; then
             cd "$(dirname "$APP_PATH")"
             zip -r "$GITHUB_WORKSPACE/ios/App/output/TradeLearn-iOS-Simulator.zip" App.app
           else
-            echo "Warning: App.app directory not found in DerivedData"
+            echo "::warning::App.app directory not found in DerivedData"
           fi
 
       - name: Upload iOS App Artifact
